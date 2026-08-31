@@ -37,6 +37,10 @@ about what's in the file — including the parts above diffuse white.
   overlay, and an ARRI-style false-colour exposure ramp.
 - **View transforms** — Standard, AgX, ACES Filmic and Raw, defaulted from what
   the file is and overridable.
+- **`.cube` LUTs** — load a 3D (or 1D) LUT, with an intensity slider. It reloads
+  the one you were last using on launch.
+- **Camera RAW** — ARW, CR2/CR3, NEF, RAF, ORF, RW2, DNG and more, through
+  Apple's RAW pipeline.
 
 The window is one continuous surface: the title bar, the canvas and the readout
 footer all share a single background colour, defined once and converted to linear
@@ -81,6 +85,31 @@ what was detected and whether you're overriding it.
 AgX and ACES here are **analytic approximations**, close to but not identical
 with the reference transforms.
 
+## LUTs
+
+`Load LUT…` in the panel takes an Adobe/IRIDAS `.cube` file, 3D or 1D, and
+applies it with an adjustable intensity. It's uploaded as a 3D texture and
+sampled trilinearly — which is precisely what the format describes, so the GPU
+does the interpolation the format was designed around.
+
+The LUT applies **after** the view transform, on display-encoded (sRGB) values,
+which is where a creative LUT expects to sit. **A LUT authored for log input —
+S-Log3, LogC, ACEScct — will not be correct here**, because Lupp has no matching
+input transform to put the data into that space first. That's a real limitation,
+not an oversight.
+
+## Camera RAW
+
+RAW decoding goes through Apple's pipeline — the same one Preview and Photos
+use — which on this machine supports **918 camera models**, including 113 Sony
+bodies. `Lupp ▸ Formats Lupp Can Read…` lists the file types; the model list
+comes from macOS and grows with OS updates, so a very new body may need one.
+
+Two things follow from that. RAW files arrive **already rendered** by Apple's
+demosaic and default tone curve, so they are treated as display-referred and
+**will not match Lightroom** — it's Apple's interpretation, not Adobe's. And
+decoding is slower than a JPEG; a 60 MP frame takes about a second.
+
 ## How zoom behaves
 
 Three rules, and they are the whole model:
@@ -112,6 +141,8 @@ first window you ever open sizes itself to the image.
 | ⌘0 / ⌘1 | Zoom to fit / 1 image pixel per screen pixel |
 | `E` / `⇧E` / `R` | Exposure up / down / reset |
 | ⌥⌘I | Show / hide the scopes panel |
+| 1–6 | RGB / R / G / B / A / Luma |
+| `C` / `F` | Clipping overlay / false colour |
 
 ## Becoming your default viewer
 
@@ -157,6 +188,11 @@ These are real and mostly deliberate.
   and says `reduced` in the readout rather than allocating ~2 GB.
 - **No DPX or Cineon**; ImageIO doesn't read them. PSD is composite only, never
   layers.
+- **RAW is Apple's rendering, not the camera's or Adobe's**, and there are no
+  RAW development controls yet — no exposure, temperature or tint on the RAW
+  itself, just the rendered result.
+- **LUTs assume display-encoded input.** A log LUT needs an input transform Lupp
+  doesn't have.
 - **The eyedropper reports scene-linear values in extended sRGB**, converted by
   CoreGraphics from whatever the file declared. That is one of several defensible
   answers to "what colour is this pixel" — it is not the display-mapped value you
