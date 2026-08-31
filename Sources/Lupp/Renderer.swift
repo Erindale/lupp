@@ -248,23 +248,46 @@ final class Renderer {
 
     // MARK: - Upload
 
-    /// Display gets fp16; the readout keeps reading the float32 CPU buffer.
+    /// Display gets fp16; the readout keeps reading the CPU buffer.
     /// fp16 carries far more precision than any display can show, and halves the
     /// texture footprint on images where that actually matters.
     func upload(_ image: FloatImage) {
         imageSize = CGSize(width: image.width, height: image.height)
         let w = image.width, h = image.height
 
+        // An sRGB image goes up as sRGB bytes and the sampler linearises it in
+        // hardware. That is a quarter of the upload and none of the conversion
+        // the float path pays for — and the shader cannot tell, because
+        // `texture2d<float>` reads an _srgb format back as linear floats.
+        if case .srgbBytes(let src) = image.storage {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm_srgb, width: w, height: h, mipmapped: false)
+            desc.usage = .shaderRead
+            desc.storageMode = .shared
+            // These files have no alpha channel, so the fourth byte is padding
+            // CoreGraphics never wrote. Read it as 1 rather than sampling
+            // uninitialised memory.
+            desc.swizzle = MTLTextureSwizzleChannels(red: .red, green: .green,
+                                                     blue: .blue, alpha: .one)
+            guard let tex = device.makeTexture(descriptor: desc) else { texture = nil; return }
+            tex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                        withBytes: src, bytesPerRow: w * 4)
+            texture = tex
+            return
+        }
+
+        guard case .linearFloat(let pixels) = image.storage else { texture = nil; return }
+
         let halfCount = w * h * 4
         let half = UnsafeMutablePointer<UInt16>.allocate(capacity: halfCount)
         defer { half.deallocate() }
 
-        var srcBuf = vImage_Buffer(data: image.pixels, height: vImagePixelCount(h),
+        var srcBuf = vImage_Buffer(data: pixels, height: vImagePixelCount(h),
                                    width: vImagePixelCount(w * 4), rowBytes: w * 16)
         var dstBuf = vImage_Buffer(data: half, height: vImagePixelCount(h),
                                    width: vImagePixelCount(w * 4), rowBytes: w * 8)
         if vImageConvert_PlanarFtoPlanar16F(&srcBuf, &dstBuf, vImage_Flags(kvImageNoFlags)) != kvImageNoError {
-            for i in 0..<halfCount { half[i] = Float16(image.pixels[i]).bitPattern }
+            for i in 0..<halfCount { half[i] = Float16(pixels[i]).bitPattern }
         }
 
         let desc = MTLTextureDescriptor.texture2DDescriptor(

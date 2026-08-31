@@ -78,6 +78,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func forget(_ c: ViewerWindowController) {
         controllers.removeAll { $0 === c }
+        // With no window open there is nothing the cached frames could be for,
+        // and a folder of 24MP photographs is gigabytes to be holding on behalf
+        // of nobody.
+        if controllers.isEmpty { ImageStore.shared.empty() }
     }
 
     // MARK: - Actions
@@ -205,8 +209,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(withTitle: "Zoom In", action: #selector(ViewerWindowController.zoomIn(_:)), keyEquivalent: "+")
         viewMenu.addItem(withTitle: "Zoom Out", action: #selector(ViewerWindowController.zoomOut(_:)), keyEquivalent: "-")
-        viewMenu.addItem(withTitle: "Actual Size (1 image pixel : 1 screen pixel)", action: #selector(ViewerWindowController.zoomActualSize(_:)), keyEquivalent: "1")
-        viewMenu.addItem(withTitle: "Zoom to Fit", action: #selector(ViewerWindowController.zoomFit(_:)), keyEquivalent: "0")
+        let actualSize = viewMenu.addItem(withTitle: "Actual Size (1 image pixel : 1 screen pixel)",
+                                          action: #selector(ViewerWindowController.zoomActualSize(_:)),
+                                          keyEquivalent: String(UnicodeScalar(NSEndFunctionKey)!))
+        actualSize.keyEquivalentModifierMask = []
+        let zoomFit = viewMenu.addItem(withTitle: "Zoom to Fit",
+                                       action: #selector(ViewerWindowController.zoomFit(_:)),
+                                       keyEquivalent: String(UnicodeScalar(NSHomeFunctionKey)!))
+        zoomFit.keyEquivalentModifierMask = []
         viewMenu.addItem(.separator())
         let next = viewMenu.addItem(withTitle: "Next Image", action: #selector(ViewerWindowController.nextImage(_:)), keyEquivalent: String(UnicodeScalar(NSRightArrowFunctionKey)!))
         next.keyEquivalentModifierMask = [.command]
@@ -221,17 +231,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Clipping Overlay", action: #selector(ViewerWindowController.toggleClipping(_:)), keyEquivalent: "c")
         viewMenu.addItem(withTitle: "False Colour", action: #selector(ViewerWindowController.toggleFalseColour(_:)), keyEquivalent: "f")
         viewMenu.addItem(.separator())
-        // Titles carry the bare-key shortcut, which the canvas handles itself —
-        // a menu key equivalent without a modifier would eat the letter in every
-        // text field in the app.
-        let scopesItem = viewMenu.addItem(withTitle: "Inspector Panel  (M)",
+        // The real shortcut, in the column where a shortcut belongs. Bare keys in
+        // a menu would normally be swallowed before the field editor ever sees
+        // them; `validateMenuItem` disables these while you're typing, and a
+        // disabled item lets its key fall through to the responder chain.
+        let scopesItem = viewMenu.addItem(withTitle: "Inspector Panel",
                                           action: #selector(ViewerWindowController.toggleScopes(_:)),
-                                          keyEquivalent: "i")
-        scopesItem.keyEquivalentModifierMask = [.command, .option]
-        let gradeItem = viewMenu.addItem(withTitle: "Colour Panel  (N)",
+                                          keyEquivalent: "m")
+        scopesItem.keyEquivalentModifierMask = []
+        let gradeItem = viewMenu.addItem(withTitle: "Colour Panel",
                                          action: #selector(ViewerWindowController.toggleGrade(_:)),
-                                         keyEquivalent: "k")
-        gradeItem.keyEquivalentModifierMask = [.command, .option]
+                                         keyEquivalent: "n")
+        gradeItem.keyEquivalentModifierMask = []
         viewMenu.addItem(.separator())
         let scrollToggle = viewMenu.addItem(withTitle: "Scroll Wheel Zooms",
                                             action: #selector(toggleScrollWheelZooms(_:)), keyEquivalent: "")

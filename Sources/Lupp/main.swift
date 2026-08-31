@@ -27,6 +27,53 @@ if let i = CommandLine.arguments.firstIndex(of: "--parse-lut"),
     exit(0)
 }
 
+// Diagnostic: `Lupp --time-load <folder>` reports what each file costs to open,
+// which storage it landed in, and what a second visit costs. Loading from a
+// network share behaves nothing like loading from an SSD, and guessing which
+// half of the time is the network is how you optimise the wrong one.
+if let i = CommandLine.arguments.firstIndex(of: "--time-load"),
+   i + 1 < CommandLine.arguments.count {
+    let root = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    var urls = [root]
+    if (try? root.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+        urls = ((try? FileManager.default.contentsOfDirectory(at: root,
+                                                              includingPropertiesForKeys: nil)) ?? [])
+            .filter { ImageLoader.canRead($0) }
+            .sorted { $0.path < $1.path }
+    }
+    let sample = Array(urls.prefix(8))
+    guard !sample.isEmpty else { print("no readable images at \(root.path)"); exit(1) }
+
+    func time(_ b: () -> Void) -> Double {
+        let t = ProcessInfo.processInfo.systemUptime
+        b()
+        return (ProcessInfo.processInfo.systemUptime - t) * 1000
+    }
+
+    var coldTotal = 0.0, warmTotal = 0.0
+    for url in sample {
+        var img: FloatImage?
+        let cold = time { img = try? ImageLoader.load(url: url) }
+        guard let img else { print("\(url.lastPathComponent): failed"); continue }
+        let kind: String
+        switch img.storage {
+        case .srgbBytes:   kind = "sRGB bytes"
+        case .linearFloat: kind = "linear float"
+        }
+        // Second visit through the store, which is what going back actually costs.
+        ImageStore.shared.load(url) { _ in }
+        let warm = time { _ = ImageStore.shared.cached(url) }
+        coldTotal += cold; warmTotal += warm
+        print(String(format: "%-18@ %5dx%-5d %-13@ %6.0f MB  decode %6.1f ms  revisit %5.2f ms",
+                     url.lastPathComponent as NSString, img.width, img.height,
+                     kind as NSString, Double(img.bytesUsed) / 1e6, cold, warm))
+    }
+    print(String(format: "\nmean over %d files: decode %.1f ms, revisit %.2f ms",
+                 sample.count, coldTotal / Double(sample.count), warmTotal / Double(sample.count)))
+
+    exit(0)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

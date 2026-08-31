@@ -18,6 +18,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     private var siblings: [URL] = []
     private var index = 0
+    /// Which way you were last going, so the prefetch can read ahead rather than
+    /// behind. Starts forward, which is the direction opening a folder implies.
+    private var lastNavigationDelta = 1
     /// Bumped on every load so a slow decode that lands after you've arrowed
     /// past it gets dropped instead of overwriting the image you're now on.
     private var loadToken = 0
@@ -522,21 +525,35 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         window?.title = url.lastPathComponent
         window?.subtitle = siblings.count > 1 ? "\(index + 1) of \(siblings.count)" : ""
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Result { try ImageLoader.load(url: url) }
-            DispatchQueue.main.async {
-                guard let self, self.loadToken == token else { return }
-                switch result {
-                case .success(let img):
-                    self.present(img)
-                case .failure(let err):
-                    self.sourceStats = nil
-                    self.canvas.show(nil)
-                    self.scopes.update(with: nil, image: nil)
-                    self.window?.subtitle = err.localizedDescription
-                }
+        ImageStore.shared.load(url) { [weak self] result in
+            guard let self, self.loadToken == token else { return }
+            switch result {
+            case .success(let img):
+                self.present(img)
+            case .failure(let err):
+                self.sourceStats = nil
+                self.canvas.show(nil)
+                self.scopes.update(with: nil, image: nil)
+                self.window?.subtitle = err.localizedDescription
             }
+            self.prefetchNeighbours()
         }
+    }
+
+    /// Decode what you are most likely to ask for next.
+    ///
+    /// Weighted in the direction you are already travelling — two ahead, one
+    /// back — because someone stepping through a folder almost always carries on
+    /// the same way, and the one behind is the cheap insurance for changing
+    /// their mind. Two ahead is deliberate: over a network share a single file
+    /// can take longer to arrive than it takes to look at the one before it.
+    private func prefetchNeighbours() {
+        guard siblings.count > 1 else { return }
+        let ahead = lastNavigationDelta >= 0 ? 1 : -1
+        let wanted = [index + ahead, index + 2 * ahead, index - ahead]
+            .filter { siblings.indices.contains($0) }
+            .map { siblings[$0] }
+        ImageStore.shared.prefetch(wanted)
     }
 
     private func present(_ img: FloatImage) {
@@ -544,7 +561,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             hasSizedToImage = true
             sizeWindow(to: img)
         }
-        sourceStats = Scopes.sourceStats(from: img)
+        sourceStats = img.sourceStats   // measured at load, off the main thread
         canvas.show(img)
 
         if let session = pendingSession {
@@ -660,10 +677,6 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         scopesButton.contentTintColor = scopesOpen ? Theme.text(.primary) : Theme.text(.tertiary)
     }
 
-    func canvasTogglePanel(_ c: ImageCanvasView, scopes wantsScopes: Bool) {
-        if wantsScopes { toggleScopes(nil) } else { toggleGrade(nil) }
-    }
-
     /// A dropped file replaces what this window is showing; extra files beyond
     /// the first open in their own windows, matching what Finder does.
     func canvas(_ c: ImageCanvasView, wantsToOpen urls: [URL]) {
@@ -675,6 +688,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     func canvasWantsNavigation(_ c: ImageCanvasView, by delta: Int) {
         guard siblings.count > 1 else { return }
+        lastNavigationDelta = delta
         index = (index + delta + siblings.count) % siblings.count
         loadCurrent()
     }
@@ -859,5 +873,22 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     func windowWillClose(_ notification: Notification) {
         AppDelegate.shared?.forget(self)
+    }
+}
+
+extension ViewerWindowController: NSMenuItemValidation {
+    /// Keep bare-key shortcuts out of the way of typing.
+    ///
+    /// M, N, Home and End all mean something in a text field, and a menu item
+    /// with no modifier would normally consume the key before the field editor
+    /// ever saw it. Returning false while text is being edited both greys the
+    /// item out and lets the keystroke carry on down the responder chain, which
+    /// is what someone halfway through typing a number expects.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if !item.keyEquivalent.isEmpty, item.keyEquivalentModifierMask.isEmpty,
+           window?.firstResponder is NSText {
+            return false
+        }
+        return true
     }
 }

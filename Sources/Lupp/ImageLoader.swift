@@ -1,3 +1,4 @@
+import Accelerate
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -70,24 +71,183 @@ enum ImageLoader {
 
         // kCGImageSourceCreateThumbnailWithTransform already applied orientation.
         let orientation: CGImagePropertyOrientation = downsampled ? .up : exif
-        let buf = try rasterizeToLinearFloat(image, orientation: orientation)
+        let buf = canKeepBytes(image, sourceDepth: depth)
+            ? try rasterizeToSRGBBytes(image, orientation: orientation)
+            : try rasterizeToLinearFloat(image, orientation: orientation)
 
         let typeID = (CGImageSourceGetType(src) as String?) ?? "public.data"
         let csName = image.colorSpace?.name.map { String($0 as String) } ?? "unknown"
+        // A camera stores a portrait frame as 6000 × 4000 plus "turn it", so the
+        // file's own numbers describe the sensor rather than the photograph.
+        // Report the picture, since that is what is on screen to be measured
+        // against. The size checks above deliberately use the raw pair: the
+        // pixel count is the same either way, and that is all they care about.
+        let turned = [.left, .right, .leftMirrored, .rightMirrored].contains(exif)
         return FloatImage(
-            width: buf.width, height: buf.height, pixels: buf.pixels,
+            width: buf.width, height: buf.height, storage: buf.storage,
             url: url, typeIdentifier: typeID, sourceBitDepth: depth,
             sourceColorSpace: shortColorSpaceName(csName),
-            fullWidth: fullW, fullHeight: fullH, wasDownsampled: downsampled,
-            maxComponent: buf.maxComponent)
+            fullWidth: turned ? fullH : fullW, fullHeight: turned ? fullW : fullH,
+            wasDownsampled: downsampled, maxComponent: buf.maxComponent)
+    }
+
+    /// Whether this image can be kept as sRGB bytes instead of linear floats.
+    ///
+    /// The test is whether the float buffer would carry any information the file
+    /// does not already have. For an eight-bit, opaque, sRGB image it would not:
+    /// every value in it is one of 256 levels, and the GPU linearises those in
+    /// the sampler for nothing. Anything else takes the float path —
+    ///
+    /// - deeper than eight bits, where the extra levels are real;
+    /// - carrying alpha, where compositing needs straight float values;
+    /// - a wider gamut than sRGB, where bytes would clip colours the file holds.
+    ///
+    /// That last one is why this checks for sRGB exactly rather than accepting
+    /// any display space. A Display P3 photograph converted into sRGB bytes
+    /// loses the part of the gamut that made it worth shooting in P3.
+    private static func canKeepBytes(_ image: CGImage, sourceDepth: Int) -> Bool {
+        guard sourceDepth <= 8 else { return false }
+        switch image.alphaInfo {
+        case .none, .noneSkipLast, .noneSkipFirst: break
+        default: return false
+        }
+        return image.colorSpace?.name == CGColorSpace.sRGB
     }
 
     // MARK: - Rasterization
 
     private struct Raster {
         let width: Int, height: Int
-        let pixels: UnsafeMutablePointer<Float>
+        let storage: PixelStore
         let maxComponent: Float
+    }
+
+    /// The quarter turns EXIF asks for on a photograph.
+    ///
+    /// Worth naming separately from the full orientation set because these four
+    /// move whole pixels to whole pixels — no resampling, no interpolation, just
+    /// rows and columns going somewhere else. The mirrored orientations are rare
+    /// enough that CoreGraphics can keep having them.
+    private enum QuarterTurn {
+        case none, cw90, ccw90, half
+
+        init?(_ o: CGImagePropertyOrientation) {
+            switch o {
+            case .up:    self = .none
+            case .down:  self = .half
+            case .right: self = .cw90     // "rotate 90° clockwise to display"
+            case .left:  self = .ccw90
+            default:     return nil
+            }
+        }
+
+        var swapsAxes: Bool { self == .cw90 || self == .ccw90 }
+
+        var vImageConstant: UInt8 {
+            switch self {
+            case .none:  return UInt8(kRotate0DegreesClockwise)
+            case .cw90:  return UInt8(kRotate90DegreesClockwise)
+            case .ccw90: return UInt8(kRotate90DegreesCounterClockwise)
+            case .half:  return UInt8(kRotate180DegreesClockwise)
+            }
+        }
+    }
+
+    /// Draw an eight-bit sRGB image into sRGB bytes — the cheap path.
+    ///
+    /// No colour conversion, no float expansion, no unpremultiply pass: a 24MP
+    /// frame lands in 96MB instead of 384MB and takes roughly a third of the
+    /// time. The sRGB decode still happens, but on the GPU, in the sampler, for
+    /// the pixels actually being displayed.
+    ///
+    /// Rotation is done afterwards rather than as part of the draw. A rotated
+    /// `draw` is a general affine transform to CoreGraphics and costs three
+    /// times a flat one, even at 90° where nothing needs resampling — which
+    /// matters, because half the photographs anyone takes are portrait.
+    private static func rasterizeToSRGBBytes(_ image: CGImage,
+                                             orientation: CGImagePropertyOrientation) throws -> Raster {
+        guard let turn = QuarterTurn(orientation) else {
+            return try rasterizeToSRGBBytesViaCG(image, orientation: orientation)
+        }
+        let w = image.width, h = image.height
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else {
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        // noneSkipLast, not premultipliedLast: the caller has already checked the
+        // image is opaque, so there is no alpha to divide back out afterwards.
+        let bitmapInfo = CGBitmapInfo(rawValue:
+            CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.noneSkipLast.rawValue)
+
+        guard let flatRaw = PixelBuffer.allocate(w * h * 4) else {
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        let flat = flatRaw.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        guard let ctx = CGContext(data: flat, width: w, height: h,
+                                  bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: space, bitmapInfo: bitmapInfo.rawValue) else {
+            PixelBuffer.free(flatRaw, w * h * 4)
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        // Eight-bit sRGB cannot express a value above diffuse white, so the
+        // maximum is 1.0 by construction rather than by measurement.
+        if turn == .none {
+            return Raster(width: w, height: h, storage: .srgbBytes(flat), maxComponent: 1)
+        }
+
+        let ow = turn.swapsAxes ? h : w
+        let oh = turn.swapsAxes ? w : h
+        guard let outRaw = PixelBuffer.allocate(ow * oh * 4) else {
+            PixelBuffer.free(flatRaw, w * h * 4)
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        let out = outRaw.bindMemory(to: UInt8.self, capacity: ow * oh * 4)
+        var src = vImage_Buffer(data: flat, height: vImagePixelCount(h),
+                                width: vImagePixelCount(w), rowBytes: w * 4)
+        var dst = vImage_Buffer(data: out, height: vImagePixelCount(oh),
+                                width: vImagePixelCount(ow), rowBytes: ow * 4)
+        var background: [UInt8] = [0, 0, 0, 0]
+        let err = vImageRotate90_ARGB8888(&src, &dst, turn.vImageConstant,
+                                          &background, vImage_Flags(kvImageNoFlags))
+        PixelBuffer.free(flatRaw, w * h * 4)
+        guard err == kvImageNoError else {
+            PixelBuffer.free(outRaw, ow * oh * 4)
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        return Raster(width: ow, height: oh, storage: .srgbBytes(out), maxComponent: 1)
+    }
+
+    /// The mirrored orientations, which vImage's quarter turns don't cover.
+    private static func rasterizeToSRGBBytesViaCG(_ image: CGImage,
+                                                  orientation: CGImagePropertyOrientation) throws -> Raster {
+        let w = image.width, h = image.height
+        let swap = [.left, .right, .leftMirrored, .rightMirrored].contains(orientation)
+        let ow = swap ? h : w
+        let oh = swap ? w : h
+
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else {
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        let bitmapInfo = CGBitmapInfo(rawValue:
+            CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.noneSkipLast.rawValue)
+
+        guard let raw = PixelBuffer.allocate(ow * oh * 4) else {
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        let pixels = raw.bindMemory(to: UInt8.self, capacity: ow * oh * 4)
+        guard let ctx = CGContext(data: pixels, width: ow, height: oh,
+                                  bitsPerComponent: 8, bytesPerRow: ow * 4,
+                                  space: space, bitmapInfo: bitmapInfo.rawValue) else {
+            PixelBuffer.free(raw, ow * oh * 4)
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        ctx.interpolationQuality = .high
+        applyOrientation(orientation, to: ctx, sourceWidth: w, sourceHeight: h,
+                         outWidth: ow, outHeight: oh)
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return Raster(width: ow, height: oh, storage: .srgbBytes(pixels), maxComponent: 1)
     }
 
     /// Draw through CoreGraphics into an extended-range linear float context.
@@ -109,14 +269,20 @@ enum ImageLoader {
             CGBitmapInfo.byteOrder32Little.rawValue |
             CGImageAlphaInfo.premultipliedLast.rawValue)
 
-        let count = ow * oh * 4
-        let pixels = UnsafeMutablePointer<Float>.allocate(capacity: count)
-        pixels.initialize(repeating: 0, count: count)
+        // Already zeroed, because the kernel hands out fresh anonymous pages
+        // that way. That matters for an image with alpha: `draw` composites
+        // source-over, so whatever is in the buffer shows through the
+        // transparent parts, and a 384MB memset to guarantee it would have cost
+        // around 40ms of every load.
+        guard let raw = PixelBuffer.allocate(ow * oh * 16) else {
+            throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
+        }
+        let pixels = raw.bindMemory(to: Float.self, capacity: ow * oh * 4)
 
         guard let ctx = CGContext(data: pixels, width: ow, height: oh,
                                   bitsPerComponent: 32, bytesPerRow: ow * 16,
                                   space: space, bitmapInfo: bitmapInfo.rawValue) else {
-            pixels.deallocate()
+            PixelBuffer.free(raw, ow * oh * 16)
             throw LoadError.decodeFailed(URL(fileURLWithPath: "/"))
         }
         ctx.interpolationQuality = .high
@@ -125,8 +291,9 @@ enum ImageLoader {
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
 
         let maxC = unpremultiplyAndFindMax(pixels, pixelCount: ow * oh)
-        return Raster(width: ow, height: oh, pixels: pixels, maxComponent: maxC)
+        return Raster(width: ow, height: oh, storage: .linearFloat(pixels), maxComponent: maxC)
     }
+
 
     /// CG's bitmap memory runs top-down while its coordinate origin is bottom-left,
     /// so an identity CTM already lands row 0 of the image at row 0 of the buffer.

@@ -19,6 +19,7 @@ enum Selftest {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         srgbLinearizes(in: dir)
+        storagePathIsChosenWell(in: dir)
         hdrSurvivesDecode(in: dir)
         exifOrientationApplied(in: dir)
         alphaIsStraight(in: dir)
@@ -53,6 +54,49 @@ enum Selftest {
               detail: String(format: "got %.3f %.3f %.3f", red.x, red.y, red.z))
     }
 
+    /// Which storage a file lands in, and that the choice is invisible above it.
+    ///
+    /// The byte path exists to be fast, so the thing to guard is that it is also
+    /// *correct*: same linear values as the float path, and never chosen for a
+    /// file whose extra information it would throw away.
+    private static func storagePathIsChosenWell(in dir: URL) {
+        let opaque = dir.appendingPathComponent("opaque.png")
+        let bytes: [UInt8] = [128, 128, 128, 255,  255, 0, 0, 255,  0, 0, 0, 255]
+        guard writeOpaqueSRGB(bytes, width: 3, height: 1, to: opaque),
+              let img = try? ImageLoader.load(url: opaque) else {
+            return fail("storage", "could not round-trip an opaque sRGB PNG")
+        }
+        if case .srgbBytes = img.storage {
+            check("an opaque 8-bit sRGB image is kept as bytes", true, detail: "4 bytes/px")
+        } else {
+            check("an opaque 8-bit sRGB image is kept as bytes", false, detail: "took the float path")
+        }
+        // The same numbers the float path produces, from a quarter of the memory.
+        let mid = img.sample(x: 0, y: 0)!
+        let red = img.sample(x: 1, y: 0)!
+        check("byte path linearizes exactly as the float path does",
+              near(mid.x, 0.2159, tol: 0.004) && near(red.x, 1, tol: 0.002)
+                  && near(red.y, 0, tol: 0.002),
+              detail: String(format: "grey %.4f (want 0.2159), red %.3f %.3f", mid.x, red.x, red.y))
+        // Opaque means opaque: the fourth byte is padding, and must never be read.
+        check("byte path reports opaque alpha", mid.w == 1 && red.w == 1,
+              detail: String(format: "alpha %.2f / %.2f", mid.w, red.w))
+        check("byte path costs 4 bytes a pixel", img.bytesUsed == 3 * 4,
+              detail: "\(img.bytesUsed) bytes for 3 pixels")
+
+        // Alpha carries compositing information that 8 bits of padding cannot.
+        let withAlpha = dir.appendingPathComponent("alpha-storage.png")
+        if writeInteger([255, 0, 0, 128], width: 1, height: 1, to: withAlpha,
+                        type: UTType.png.identifier),
+           let a = try? ImageLoader.load(url: withAlpha) {
+            if case .linearFloat = a.storage {
+                check("an image with alpha stays float", true, detail: "16 bytes/px")
+            } else {
+                check("an image with alpha stays float", false, detail: "took the byte path")
+            }
+        }
+    }
+
     /// The reason the whole pipeline is float: EXR values above 1.0 must not clip.
     private static func hdrSurvivesDecode(in dir: URL) {
         let url = dir.appendingPathComponent("hdr.exr")
@@ -66,6 +110,11 @@ enum Selftest {
               detail: String(format: "got %.3f %.3f %.3f, want 8 4 2", hdr.x, hdr.y, hdr.z))
         check("HDR flagged in metadata", img.isHDR && img.maxComponent > 7.9,
               detail: String(format: "isHDR=%@ max=%.3f", img.isHDR ? "true" : "false", img.maxComponent))
+        if case .linearFloat = img.storage {
+            check("a scene-linear image stays float", true, detail: "16 bytes/px")
+        } else {
+            check("a scene-linear image stays float", false, detail: "took the byte path")
+        }
     }
 
     /// EXIF 6 means "rotate 90° clockwise to display". Getting this wrong shows
@@ -83,10 +132,36 @@ enum Selftest {
 
         check("EXIF 6 swaps dimensions", img.width == 2 && img.height == 4,
               detail: "got \(img.width)×\(img.height), want 2×4")
+        // The readout quotes these, so they have to describe the photograph and
+        // not the sensor it came off.
+        check("EXIF 6 swaps the reported full size",
+              img.fullWidth == 2 && img.fullHeight == 4,
+              detail: "got \(img.fullWidth)×\(img.fullHeight), want 2×4")
         if img.width == 2, img.height == 4 {
             let topRight = img.sample(x: 1, y: 0)!
             check("EXIF 6 rotates clockwise", topRight.x > 0.9,
                   detail: String(format: "top-right red = %.3f, want ~1", topRight.x))
+        }
+
+        // The byte path turns images with vImage rather than with a rotated
+        // draw, so it needs its own proof — and all four quarter turns, since
+        // getting the direction backwards is the obvious way to break it.
+        for (exif, wantW, wantH, corner) in [(UInt32(1), 4, 2, (0, 0)),
+                                             (UInt32(3), 4, 2, (3, 1)),
+                                             (UInt32(6), 2, 4, (1, 0)),
+                                             (UInt32(8), 2, 4, (0, 3))] {
+            let u = dir.appendingPathComponent("rot-bytes-\(exif).png")
+            guard writeOpaqueSRGB(bytes, width: 4, height: 2, to: u, orientation: exif),
+                  let r = try? ImageLoader.load(url: u) else {
+                fail("EXIF bytes \(exif)", "could not round-trip"); continue
+            }
+            guard case .srgbBytes = r.storage else {
+                fail("EXIF bytes \(exif)", "took the float path"); continue
+            }
+            let ok = r.width == wantW && r.height == wantH
+                && (r.sample(x: corner.0, y: corner.1)?.x ?? 0) > 0.9
+            check("byte path applies EXIF \(exif)", ok,
+                  detail: "got \(r.width)×\(r.height), red expected at \(corner)")
         }
     }
 
@@ -549,6 +624,28 @@ enum Selftest {
                                provider: provider, decode: nil,
                                shouldInterpolate: false, intent: .defaultIntent),
               let dest = CGImageDestinationCreateWithURL(url as CFURL, type as CFString, 1, nil)
+        else { return false }
+        var props: [CFString: Any] = [:]
+        if let o = orientation { props[kCGImagePropertyOrientation] = o }
+        CGImageDestinationAddImage(dest, cg, props as CFDictionary)
+        return CGImageDestinationFinalize(dest)
+    }
+
+    /// An opaque, sRGB-tagged PNG — the shape of file the byte path is for.
+    /// `writeInteger` tags DeviceRGB and keeps an alpha channel, both of which
+    /// send a file down the float path on purpose.
+    private static func writeOpaqueSRGB(_ bytes: [UInt8], width: Int, height: Int,
+                                        to url: URL, orientation: UInt32? = nil) -> Bool {
+        var data = bytes
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let provider = CGDataProvider(data: Data(bytes: &data, count: data.count) as CFData),
+              let cg = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                               bytesPerRow: width * 4, space: space,
+                               bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                               provider: provider, decode: nil,
+                               shouldInterpolate: false, intent: .defaultIntent),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL,
+                                                         UTType.png.identifier as CFString, 1, nil)
         else { return false }
         var props: [CFString: Any] = [:]
         if let o = orientation { props[kCGImagePropertyOrientation] = o }

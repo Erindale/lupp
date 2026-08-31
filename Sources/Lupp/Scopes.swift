@@ -53,11 +53,9 @@ struct Scopes {
         var sum = SIMD3<Double>(repeating: 0)
         let total = image.width * image.height
         let step = max(1, Int((Double(total) / 600_000.0).rounded(.up)))
-        let p = image.pixels
         var i = 0
         while i < total {
-            let o = i * 4
-            let lin = SIMD3<Float>(p[o], p[o + 1], p[o + 2])
+            let lin = image.linearRGB(atPixel: i)
             stats.min = simd_min(stats.min, lin)
             stats.max = simd_max(stats.max, lin)
             sum += SIMD3<Double>(Double(lin.x), Double(lin.y), Double(lin.z))

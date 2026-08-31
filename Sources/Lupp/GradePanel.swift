@@ -147,7 +147,7 @@ final class GradePanel: SidePanel {
                                  toggle: { [weak self] on in
                                      self?.emit { self?.onBypass?(.whiteBalance, on) } },
                                  reset: { [weak self] in self?.resetWhiteBalance() })
-        tetraHeader = sectionHeader("Grade — tetrahedral",
+        tetraHeader = sectionHeader("Tetrahedral",
                                     toggle: { [weak self] on in
                                         self?.emit { self?.onBypass?(.tetra, on) } },
                                     reset: { [weak self] in self?.resetTetra() })
