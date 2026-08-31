@@ -13,8 +13,8 @@ final class GradePanel: SidePanel {
     var onPickLUT: ((String?) -> Void)?
     var onRemoveLUT: ((String) -> Void)?
     var onTetra: ((Renderer.TetraCorners, Float, Bool) -> Void)?
-    /// exposure EV, white balance gains, contrast, pivot
-    var onLight: ((Float, SIMD3<Float>, Float, Float) -> Void)?
+    /// exposure EV, white balance gains, contrast, pivot, black point, white point
+    var onLight: ((Float, SIMD3<Float>, Float, Float, Float, Float) -> Void)?
     var onSavePreset: (() -> Void)?
     var onUsePreset: ((String) -> Void)?
     var onDeletePreset: ((String) -> Void)?
@@ -28,6 +28,8 @@ final class GradePanel: SidePanel {
     private let lutSlider = NSSlider(value: 100, minValue: 0, maxValue: 100,
                                      target: nil, action: nil)
 
+    private lazy var blackRow = LabelledSliderRow(label: "Black point", initial: 0, span: 0.4)
+    private lazy var whiteRow = LabelledSliderRow(label: "White point", initial: 1, span: 0.6)
     private lazy var exposureRow = LabelledSliderRow(label: "Exposure", initial: 0,
                                                     span: 5, decimals: 2)
     private lazy var contrastRow = LabelledSliderRow(label: "Contrast", initial: 1, span: 0.9)
@@ -64,7 +66,7 @@ final class GradePanel: SidePanel {
         lutSlider.isEnabled = false
         lutLabel.lineBreakMode = .byTruncatingMiddle
 
-        let lightRows = [exposureRow, contrastRow, pivotRow]
+        let lightRows = [blackRow, whiteRow, exposureRow, contrastRow, pivotRow]
         let balanceRows = wbRows
         for r in lightRows + balanceRows {
             r.onChange = { [weak self] in self?.lightChanged() }
@@ -96,7 +98,7 @@ final class GradePanel: SidePanel {
         let lutNote = caption("Applied after the view transform, in display space. A LUT authored for log input won’t be right here.")
         let exportNote = caption("Writes the image as shown — transform, LUT, grade and exposure baked in, at full resolution.")
 
-        let lightNote = caption("Linear, before the view transform — exposure and balance behave like light, not like edits to a finished picture. Contrast pivots on 0.18 scene grey.")
+        let lightNote = caption("Linear, before the view transform — these behave like light, not like edits to a finished picture. Black and white point set what counts as black and white first; contrast pivots on 0.18 scene grey.")
 
         let lightHeader = sectionHeader("Light") { [weak self] in self?.resetLight() }
         let wbHeader = sectionHeader("White balance") { [weak self] in self?.resetWhiteBalance() }
@@ -106,7 +108,7 @@ final class GradePanel: SidePanel {
         }
 
         var column: [NSView] = [
-            lightHeader, exposureRow, contrastRow, pivotRow,
+            lightHeader, blackRow, whiteRow, exposureRow, contrastRow, pivotRow,
             wbHeader, wbRows[0], wbRows[1], wbRows[2],
             lightNote,
             separator(),
@@ -164,7 +166,8 @@ final class GradePanel: SidePanel {
         emit {
             onLight?(exposureRow.value,
                      SIMD3(wbRows[0].value, wbRows[1].value, wbRows[2].value),
-                     contrastRow.value, pivotRow.value)
+                     contrastRow.value, pivotRow.value,
+                     blackRow.value, whiteRow.value)
         }
     }
 
@@ -179,8 +182,14 @@ final class GradePanel: SidePanel {
         emit { onSavePreset?() }
     }
 
+    private var lightAndBalanceRows: [LabelledSliderRow] {
+        [blackRow, whiteRow, exposureRow, contrastRow, pivotRow] + wbRows
+    }
+
     private func resetLight() {
-        for row in [exposureRow, contrastRow, pivotRow] { row.resetToDefault() }
+        for row in [blackRow, whiteRow, exposureRow, contrastRow, pivotRow] {
+            row.resetToDefault()
+        }
         lightChanged()
     }
 
@@ -263,6 +272,8 @@ final class GradePanel: SidePanel {
         let v = TetraLayout.values(from: display.tetra)
         for row in tetraRows { row.value = v[row.corner][row.component] }
         tetraAmount.doubleValue = Double(display.tetraAmount) * 100
+        blackRow.value = display.blackPoint
+        whiteRow.value = display.whitePoint
         exposureRow.value = display.exposureEV
         contrastRow.value = display.contrast
         pivotRow.value = display.contrastPivot

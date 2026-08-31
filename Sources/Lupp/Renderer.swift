@@ -44,6 +44,8 @@ final class Renderer {
         var contrast: Float
         var contrastPivot: Float
         var tetraAmount: Float
+        var blackPoint: Float
+        var whitePoint: Float
         var showChecker: UInt32
         var viewTransform: UInt32
         var channel: UInt32
@@ -80,6 +82,9 @@ final class Renderer {
         /// Power around `contrastPivot`; 1.0 is a no-op.
         var contrast: Float = 1
         var contrastPivot: Float = 0.18
+        /// Levels remap applied before everything else. 0 and 1 are a no-op.
+        var blackPoint: Float = 0
+        var whitePoint: Float = 1
         var viewTransform: ViewTransform = .standard
         var channel: ChannelView = .rgb
         var showClipping = false
@@ -415,6 +420,8 @@ final class Renderer {
                  contrast: display.contrast,
                  contrastPivot: display.contrastPivot,
                  tetraAmount: display.tetraAmount,
+                 blackPoint: display.blackPoint,
+                 whitePoint: display.whitePoint,
                  showChecker: showChecker,
                  viewTransform: UInt32(display.viewTransform.rawValue),
                  channel: UInt32(display.channel.rawValue),
@@ -478,6 +485,8 @@ final class Renderer {
         float  contrast;
         float  contrastPivot;
         float  tetraAmount;
+        float  blackPoint;
+        float  whitePoint;
         uint   showChecker;
         uint   viewTransform;
         uint   channel;
@@ -641,10 +650,15 @@ final class Renderer {
                                   constant TetraCorners &tetra [[buffer(1)]]) {
         float4 c = tex.sample(smp, in.uv);
 
-        // The linear grade, in the order a colourist expects: exposure, then
-        // white balance, then contrast — all before any tone map, so they behave
-        // like light rather than like adjustments to an already-rendered picture.
-        float3 rgb = c.rgb * u.exposure * u.whiteBalance.rgb;
+        // The linear grade, in the order a colourist expects: set the range, then
+        // exposure, then white balance, then contrast — all before any tone map,
+        // so they behave like light rather than like adjustments to an
+        // already-rendered picture.
+        //
+        // Black and white point come first because they say what counts as black
+        // and white in the source; everything after is working in those terms.
+        float3 rgb = (c.rgb - u.blackPoint) / max(u.whitePoint - u.blackPoint, 1e-4);
+        rgb = rgb * u.exposure * u.whiteBalance.rgb;
         rgb = applyContrast(rgb, u.contrast, u.contrastPivot);
 
         // Clipping is a fact about the graded data, so it is judged here — before

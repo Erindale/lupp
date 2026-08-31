@@ -25,6 +25,8 @@ struct Preset: Codable, Equatable {
     var whiteBalance: [Float]?
     var contrast: Float?
     var contrastPivot: Float?
+    var blackPoint: Float?
+    var whitePoint: Float?
 
     static func from(_ d: Renderer.DisplayState, lutPath: String?) -> Preset {
         Preset(name: "",
@@ -37,7 +39,9 @@ struct Preset: Codable, Equatable {
                tetraEnabled: d.tetraEnabled,
                whiteBalance: [d.whiteBalance.x, d.whiteBalance.y, d.whiteBalance.z],
                contrast: d.contrast,
-               contrastPivot: d.contrastPivot)
+               contrastPivot: d.contrastPivot,
+               blackPoint: d.blackPoint,
+               whitePoint: d.whitePoint)
     }
 
     /// Applies everything except the LUT, which the caller must load from disk.
@@ -52,6 +56,8 @@ struct Preset: Codable, Equatable {
         else { d.whiteBalance = SIMD3(1, 1, 1) }
         d.contrast = contrast ?? 1
         d.contrastPivot = contrastPivot ?? 0.18
+        d.blackPoint = blackPoint ?? 0
+        d.whitePoint = whitePoint ?? 1
     }
 
     static func flatten(_ t: Renderer.TetraCorners) -> [Float] {

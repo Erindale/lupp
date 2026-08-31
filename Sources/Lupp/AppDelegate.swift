@@ -194,10 +194,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Clipping Overlay", action: #selector(ViewerWindowController.toggleClipping(_:)), keyEquivalent: "c")
         viewMenu.addItem(withTitle: "False Colour", action: #selector(ViewerWindowController.toggleFalseColour(_:)), keyEquivalent: "f")
         viewMenu.addItem(.separator())
-        let scopesItem = viewMenu.addItem(withTitle: "Scopes",
+        // Titles carry the bare-key shortcut, which the canvas handles itself —
+        // a menu key equivalent without a modifier would eat the letter in every
+        // text field in the app.
+        let scopesItem = viewMenu.addItem(withTitle: "Inspector Panel  (M)",
                                           action: #selector(ViewerWindowController.toggleScopes(_:)),
                                           keyEquivalent: "i")
         scopesItem.keyEquivalentModifierMask = [.command, .option]
+        let gradeItem = viewMenu.addItem(withTitle: "Colour Panel  (N)",
+                                         action: #selector(ViewerWindowController.toggleGrade(_:)),
+                                         keyEquivalent: "k")
+        gradeItem.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(.separator())
         let scrollToggle = viewMenu.addItem(withTitle: "Scroll Wheel Zooms",
                                             action: #selector(toggleScrollWheelZooms(_:)), keyEquivalent: "")

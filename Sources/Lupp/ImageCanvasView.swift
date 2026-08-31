@@ -8,6 +8,7 @@ protocol ImageCanvasDelegate: AnyObject {
     func canvasWantsNavigation(_ canvas: ImageCanvasView, by delta: Int)
     func canvas(_ canvas: ImageCanvasView, wantsToOpen urls: [URL])
     func canvasDidChangeBackground(_ canvas: ImageCanvasView)
+    func canvasTogglePanel(_ canvas: ImageCanvasView, scopes: Bool)
 }
 
 /// The image surface: zoom, pan, and the eyedropper.
@@ -365,6 +366,11 @@ final class ImageCanvasView: MTKView {
         case "r": exposureEV = 0
         case "c": display.showClipping.toggle()
         case "f": display.falseColour.toggle()
+        // Bare keys, handled here rather than as menu key equivalents: a menu
+        // shortcut with no modifier would swallow the letter everywhere,
+        // including inside the panels' numeric fields.
+        case "m": canvasDelegate?.canvasTogglePanel(self, scopes: true)
+        case "n": canvasDelegate?.canvasTogglePanel(self, scopes: false)
         case "1": display.channel = .rgb
         case "2": display.channel = .red
         case "3": display.channel = .green

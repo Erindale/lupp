@@ -212,13 +212,15 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             self.canvas.display.tetraEnabled = enabled
             self.rememberGrade()
         }
-        grade.onLight = { [weak self] ev, wb, contrast, pivot in
+        grade.onLight = { [weak self] ev, wb, contrast, pivot, black, white in
             guard let self else { return }
             var d = self.canvas.display
             d.exposureEV = ev
             d.whiteBalance = wb
             d.contrast = contrast
             d.contrastPivot = pivot
+            d.blackPoint = black
+            d.whitePoint = white
             self.canvas.display = d          // one write, one refresh
             self.rememberGrade()
         }
@@ -538,6 +540,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         readout.refreshBackground()
         gradeButton.image = Theme.gradeIcon(active: gradeOpen)
         scopesButton.contentTintColor = scopesOpen ? Theme.text(.primary) : Theme.text(.tertiary)
+    }
+
+    func canvasTogglePanel(_ c: ImageCanvasView, scopes wantsScopes: Bool) {
+        if wantsScopes { toggleScopes(nil) } else { toggleGrade(nil) }
     }
 
     /// A dropped file replaces what this window is showing; extra files beyond

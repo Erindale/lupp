@@ -98,8 +98,10 @@ with the reference transforms.
 The colour panel reads top to bottom in the order the pixels travel: light, then
 the cube warp, then a LUT on top, then what to do with the result.
 
-**Light** — exposure (EV), a three-channel white balance, and a contrast with an
-adjustable pivot. All three are applied in **linear, before the view transform**,
+**Light** — black and white point, exposure (EV), a three-channel white balance,
+and a contrast with an adjustable pivot. Black and white point come first, since
+they say what counts as black and white in the source and everything after works
+in those terms. All of it is applied in **linear, before the view transform**,
 so they behave like light rather than like edits to an already-rendered picture.
 Contrast pivots on 0.18 scene grey by default, rather than on whatever 0.5 means
 in the current encoding.
@@ -187,7 +189,7 @@ first window you ever open sizes itself to the image.
 | ← → | Previous / next image in the folder |
 | ⌘0 / ⌘1 | Zoom to fit / 1 image pixel per screen pixel |
 | `E` / `⇧E` / `R` | Exposure up / down / reset |
-| ⌥⌘I | Show / hide the inspector panel |
+| `M` / `N` | Show / hide the inspector / colour panel |
 | ⇧⌘E | Export as displayed |
 | Right-drag on the image | Lighten / darken the backdrop |
 

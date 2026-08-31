@@ -335,6 +335,8 @@ enum Selftest {
         var neutral = plain
         neutral.whiteBalance = SIMD3(1, 1, 1)
         neutral.contrast = 1
+        neutral.blackPoint = 0
+        neutral.whitePoint = 1
         guard let n = pixels(neutral) else { return fail("grade", "export failed") }
         let unchanged = zip(p, n).allSatisfy { a, b in
             zip(a, b).allSatisfy { abs(Int($0) - Int($1)) <= 1 }
@@ -369,6 +371,22 @@ enum Selftest {
               detail: "red became \(k[0])")
         check("contrast above 1 lifts values above the pivot", k[2][0] >= p[2][0],
               detail: "grey \(p[2][0]) -> \(k[2][0])")
+
+        // Black and white point are a levels remap: lifting black to the value a
+        // pixel already holds must send that pixel to zero.
+        var lifted = plain
+        lifted.blackPoint = 0.2159      // linear value of sRGB 128
+        guard let b = pixels(lifted) else { return fail("black point", "export failed") }
+        check("black point at a pixel's own value sends it to black", b[2][0] <= 2,
+              detail: "grey became \(b[2][0]), want 0")
+
+        // Pulling white down to 0.5 doubles everything below it.
+        var pulled = plain
+        pulled.whitePoint = 0.5
+        guard let wp = pixels(pulled) else { return fail("white point", "export failed") }
+        check("white point at 0.5 doubles the linear range",
+              abs(Int(wp[2][0]) - 176) <= 2,
+              detail: "grey became \(wp[2][0]), want ~176 (same as +1 EV)")
 
         // Export end to end: render, write a real file, read it back and compare.
         // Covers the encode, the CGImage construction and the ImageIO write, none

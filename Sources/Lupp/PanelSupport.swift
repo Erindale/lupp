@@ -55,7 +55,14 @@ class SidePanel: NSView {
         // the clip view pins its own origin.
         scroll.hasHorizontalScroller = false
         scroll.horizontalScrollElasticity = .none
-        scroll.contentView = VerticalOnlyClipView()
+        let clip = VerticalOnlyClipView()
+        // A fresh clip view arrives with drawsBackground on and its own semantic
+        // colour, which paints straight over the panel — and being semantic it
+        // only knows light and dark, which is exactly the "either light or dark"
+        // slab that refused to follow the backdrop.
+        clip.drawsBackground = false
+        scroll.contentView = clip
+        scroll.drawsBackground = false
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         scroll.verticalScroller = OverlayScroller()
