@@ -179,6 +179,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         decEV.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(withTitle: "Reset Exposure", action: #selector(ViewerWindowController.resetExposure(_:)), keyEquivalent: "r")
         viewMenu.addItem(.separator())
+        let scopesItem = viewMenu.addItem(withTitle: "Scopes",
+                                          action: #selector(ViewerWindowController.toggleScopes(_:)),
+                                          keyEquivalent: "i")
+        scopesItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(.separator())
         let scrollToggle = viewMenu.addItem(withTitle: "Scroll Wheel Zooms",
                                             action: #selector(toggleScrollWheelZooms(_:)), keyEquivalent: "")
         scrollToggle.target = self

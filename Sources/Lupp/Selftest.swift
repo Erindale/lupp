@@ -24,6 +24,7 @@ enum Selftest {
         alphaIsStraight(in: dir)
         viewportAnchorHolds()
         openingZoomRules(in: dir)
+        scopesReadDisplayEncoded(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -177,6 +178,48 @@ enum Selftest {
         check("shrinking the window doesn't change the zoom",
               abs(canvas.zoomPercent - before) < 0.01,
               detail: String(format: "%.1f%% -> %.1f%%", before, canvas.zoomPercent))
+    }
+
+    /// The scopes bin display-encoded values while the readout reports linear.
+    /// That split is deliberate, so pin it: mid-grey must land mid-histogram, not
+    /// at 21% where its linear value sits.
+    private static func scopesReadDisplayEncoded(in dir: URL) {
+        let url = dir.appendingPathComponent("scopes.png")
+        // A flat sRGB 50% grey field.
+        var bytes = [UInt8](repeating: 128, count: 64 * 64 * 4)
+        for i in stride(from: 3, to: bytes.count, by: 4) { bytes[i] = 255 }
+        guard writeInteger(bytes, width: 64, height: 64, to: url, type: UTType.png.identifier),
+              let img = try? ImageLoader.load(url: url),
+              let s = Scopes.compute(from: img) else {
+            return fail("scopes", "could not compute")
+        }
+
+        check("scopes report the linear mean", near(s.stats.mean.x, 0.2159, tol: 0.005),
+              detail: String(format: "mean %.4f, want 0.2159", s.stats.mean.x))
+
+        // Histogram raster is 256 wide; a 50% sRGB field must peak near column 128.
+        let peakColumn = brightestColumn(of: s.histogram)
+        check("histogram bins sRGB, not linear", abs(peakColumn - 128) <= 3,
+              detail: "peak at column \(peakColumn), want ~128 (55 would mean linear)")
+
+        check("no false clipping on a mid-grey field",
+              s.stats.clippedHigh == 0 && s.stats.aboveOne == 0,
+              detail: "high=\(s.stats.clippedHigh) aboveOne=\(s.stats.aboveOne)")
+    }
+
+    private static func brightestColumn(of image: CGImage) -> Int {
+        guard let data = image.dataProvider?.data as Data? else { return -1 }
+        let w = image.width, h = image.height
+        var best = -1, bestCount = 0
+        data.withUnsafeBytes { raw in
+            let p = raw.bindMemory(to: UInt8.self)
+            for x in 0..<w {
+                var n = 0
+                for y in 0..<h where p[(y * w + x) * 4 + 3] > 0 { n += 1 }
+                if n > bestCount { bestCount = n; best = x }
+            }
+        }
+        return best
     }
 
     // MARK: - Helpers

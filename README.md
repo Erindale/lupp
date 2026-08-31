@@ -28,6 +28,25 @@ about what's in the file — including the parts above diffuse white.
   `frame_2` comes before `frame_10`.
 - Nearest-neighbour sampling above 200%, so at high zoom you see the pixels in
   the file rather than the viewer's interpolation.
+- **Scopes panel** (⌥⌘I, or the button in the title bar) — histogram, RGB parade,
+  vectorscope with a BT.709 graticule, plus per-channel min/max/mean and clipping
+  percentages.
+
+The window is one continuous surface: the title bar, the canvas and the readout
+footer all share a single background colour, defined once and converted to linear
+for the Metal drawable so they can't drift apart.
+
+## Two colour spaces, both labelled
+
+The eyedropper reports **linear** values — that's the file's own light-linear
+data, where an EXR highlight reads 8.0.
+
+The scopes bin **sRGB-encoded** values, because that's what every grading tool
+shows and a linear histogram crushes almost everything into the bottom eighth of
+the graph. A 50% grey field peaks mid-histogram, not at 21%.
+
+Both are correct answers to different questions, which is exactly why each says
+which one it is rather than leaving you to guess.
 
 ## How zoom behaves
 
@@ -58,6 +77,7 @@ first window you ever open sizes itself to the image.
 | ← → | Previous / next image in the folder |
 | ⌘0 / ⌘1 | Zoom to fit / 1 image pixel per screen pixel |
 | `E` / `⇧E` / `R` | Exposure up / down / reset |
+| ⌥⌘I | Show / hide the scopes panel |
 
 ## Becoming your default viewer
 
@@ -107,6 +127,9 @@ These are real and mostly deliberate.
   CoreGraphics from whatever the file declared. That is one of several defensible
   answers to "what colour is this pixel" — it is not the display-mapped value you
   are looking at, and for a wide-gamut file the two differ.
+- **Scopes sample up to 600k pixels**, strided across the image, not every pixel.
+  Statistically indistinguishable and far faster; the exact count is shown in the
+  panel. They also cover the whole image, not the visible region.
 - **Telling a mouse from a trackpad is a heuristic.** Lupp uses gesture phase,
   which smooth-scrolling drivers (Logi Options+ and friends) don't fake — unlike
   `hasPreciseScrollingDeltas`, which they do. If it still guesses wrong, untick
@@ -116,8 +139,8 @@ These are real and mostly deliberate.
 
 ## Not here yet
 
-Histograms, palette extraction, image-sequence playback, and video with the same
-readout and right-drag scrubbing. Video is the big one: `AVPlayerLayer` won't
+Palette extraction, image-sequence playback, and video with the same readout,
+scopes and right-drag scrubbing. Video is the big one: `AVPlayerLayer` won't
 hand pixels back, so an honest readout needs `AVPlayerItemVideoOutput` plus the
 YCbCr matrix and transfer function from the track — which is exactly where most
 tools quietly get the numbers wrong.

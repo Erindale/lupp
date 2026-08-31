@@ -4,26 +4,43 @@ import AppKit
 final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSWindowDelegate {
     private let canvas = ImageCanvasView()
     private let readout = ReadoutBar()
+    private let scopes = ScopesPanel()
+    private var scopesWidth: NSLayoutConstraint!
+    private let scopesButton = NSButton()
 
     private var siblings: [URL] = []
     private var index = 0
     /// Bumped on every load so a slow decode that lands after you've arrowed
     /// past it gets dropped instead of overwriting the image you're now on.
     private var loadToken = 0
+    private var scopesToken = 0
     private var hasSizedToImage = false
+
+    private var scopesOpen: Bool {
+        get { Preferences.scopesPanelOpen }
+        set { Preferences.scopesPanelOpen = newValue }
+    }
 
     convenience init(url: URL) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
-        window.titlebarAppearsTransparent = false
-        window.minSize = NSSize(width: 320, height: 240)
+        window.minSize = NSSize(width: 480, height: 320)
         window.tabbingMode = .disallowed
+
+        // Seamless chrome: a transparent title bar over a window background that
+        // is the canvas colour, so the header, the image area and the footer read
+        // as one continuous surface.
+        window.titlebarAppearsTransparent = true
+        window.backgroundColor = Theme.background
+        window.isOpaque = true
+
         self.init(window: window)
 
         window.delegate = self
         buildContentView()
+        buildTitlebarAccessory()
         canvas.canvasDelegate = self
 
         // Restores the last size and position. Only the very first window ever
@@ -35,26 +52,107 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         else if let last = AppDelegate.shared?.frontmostViewerFrame, last == window.frame {
             window.setFrameOrigin(NSPoint(x: last.minX + 24, y: last.minY - 24))
         }
+        applyScopesVisibility(animated: false)
         open(url: url)
     }
 
     private func buildContentView() {
         guard let content = window?.contentView else { return }
-        canvas.translatesAutoresizingMaskIntoConstraints = false
-        readout.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(canvas)
-        content.addSubview(readout)
+        content.wantsLayer = true
+        content.layer?.backgroundColor = Theme.background.cgColor
+
+        for v in [canvas, scopes, readout] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(v)
+        }
+        scopesWidth = scopes.widthAnchor.constraint(equalToConstant: 0)
+
         NSLayoutConstraint.activate([
             canvas.topAnchor.constraint(equalTo: content.topAnchor),
             canvas.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            canvas.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            canvas.trailingAnchor.constraint(equalTo: scopes.leadingAnchor),
             canvas.bottomAnchor.constraint(equalTo: readout.topAnchor),
+
+            scopes.topAnchor.constraint(equalTo: content.topAnchor),
+            scopes.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scopes.bottomAnchor.constraint(equalTo: readout.topAnchor),
+            scopesWidth,
 
             readout.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             readout.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             readout.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             readout.heightAnchor.constraint(equalToConstant: ReadoutBar.height),
         ])
+    }
+
+    /// The scopes toggle lives in the title bar's right-hand accessory slot, which
+    /// is how AppKit puts a control up there without a custom title bar.
+    private func buildTitlebarAccessory() {
+        scopesButton.bezelStyle = .texturedRounded
+        scopesButton.isBordered = false
+        scopesButton.image = NSImage(systemSymbolName: "chart.bar.xaxis",
+                                     accessibilityDescription: "Scopes")?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+        scopesButton.imagePosition = .imageOnly
+        scopesButton.target = self
+        scopesButton.action = #selector(toggleScopes(_:))
+        scopesButton.toolTip = "Scopes — histogram, RGB parade, vectorscope"
+        scopesButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 42, height: 28))
+        host.addSubview(scopesButton)
+        NSLayoutConstraint.activate([
+            host.widthAnchor.constraint(equalToConstant: 42),
+            host.heightAnchor.constraint(equalToConstant: 28),
+            scopesButton.centerYAnchor.constraint(equalTo: host.centerYAnchor),
+            scopesButton.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -12),
+        ])
+
+        let acc = NSTitlebarAccessoryViewController()
+        acc.layoutAttribute = .right
+        acc.view = host
+        window?.addTitlebarAccessoryViewController(acc)
+    }
+
+    // MARK: - Scopes
+
+    @objc func toggleScopes(_ sender: Any?) {
+        scopesOpen.toggle()
+        applyScopesVisibility(animated: true)
+    }
+
+    private func applyScopesVisibility(animated: Bool) {
+        let target: CGFloat = scopesOpen ? Theme.panelWidth : 0
+        scopesButton.contentTintColor = scopesOpen ? .controlAccentColor : .secondaryLabelColor
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.16
+                ctx.allowsImplicitAnimation = true
+                scopesWidth.animator().constant = target
+                window?.contentView?.layoutSubtreeIfNeeded()
+            }
+        } else {
+            scopesWidth.constant = target
+        }
+        if scopesOpen { recomputeScopes() }
+    }
+
+    /// Whole-image reductions, so they run off the main thread and only while the
+    /// panel is actually open — a closed panel should cost nothing.
+    private func recomputeScopes() {
+        guard scopesOpen, let img = canvas.image else {
+            scopes.update(with: nil, image: nil)
+            return
+        }
+        scopesToken += 1
+        let token = scopesToken
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Scopes.compute(from: img)
+            DispatchQueue.main.async {
+                guard let self, self.scopesToken == token else { return }
+                self.scopes.update(with: result, image: img)
+            }
+        }
     }
 
     // MARK: - Loading
@@ -84,6 +182,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
                     self.present(img)
                 case .failure(let err):
                     self.canvas.show(nil)
+                    self.scopes.update(with: nil, image: nil)
                     self.window?.subtitle = err.localizedDescription
                 }
             }
@@ -96,6 +195,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             sizeWindow(to: img)
         }
         canvas.show(img)
+        recomputeScopes()
 
         var subtitle = "\(img.fullWidth) × \(img.fullHeight)"
         subtitle += " · \(shortType(img.typeIdentifier)) \(img.sourceBitDepth)-bit"
@@ -111,9 +211,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         let avail = screen.visibleFrame.insetBy(dx: 60, dy: 60)
         let native = CGSize(width: CGFloat(img.width) / max(screen.backingScaleFactor, 1),
                             height: CGFloat(img.height) / max(screen.backingScaleFactor, 1))
-        let fit = min(1, min(avail.width / native.width,
+        let chrome = scopesOpen ? Theme.panelWidth : 0
+        let fit = min(1, min((avail.width - chrome) / native.width,
                              (avail.height - ReadoutBar.height) / native.height))
-        let size = NSSize(width: max(360, native.width * fit),
+        let size = NSSize(width: max(360, native.width * fit) + chrome,
                           height: max(240, native.height * fit) + ReadoutBar.height)
         window.setContentSize(size)
         window.center()

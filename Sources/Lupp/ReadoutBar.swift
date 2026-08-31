@@ -2,7 +2,11 @@ import AppKit
 import simd
 
 /// The bottom strip: what colour is under the cursor, and how far in we are.
-final class ReadoutBar: NSVisualEffectView {
+///
+/// Painted flat in the window background rather than given a material, so the
+/// footer, the canvas and the title bar are one continuous surface with no seam
+/// where they meet.
+final class ReadoutBar: NSView {
     private let swatch = SwatchView()
     private let left = ReadoutBar.label(alignment: .left)
     private let right = ReadoutBar.label(alignment: .right)
@@ -11,9 +15,8 @@ final class ReadoutBar: NSVisualEffectView {
 
     init() {
         super.init(frame: .zero)
-        material = .titlebar
-        blendingMode = .withinWindow
-        state = .followsWindowActiveState
+        wantsLayer = true
+        layer?.backgroundColor = Theme.background.cgColor
 
         for v in [swatch, left, right] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false

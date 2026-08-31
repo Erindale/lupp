@@ -51,7 +51,10 @@ final class ImageCanvasView: MTKView {
         colorPixelFormat = .rgba16Float
         colorspace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)
         (layer as? CAMetalLayer)?.wantsExtendedDynamicRangeContent = true
-        clearColor = MTLClearColor(red: 0.055, green: 0.055, blue: 0.055, alpha: 1)
+        // Linear, because the drawable is extended-linear — the same colour the
+        // chrome uses, converted once in Theme so the two can't drift apart.
+        let bg = Theme.backgroundLinear
+        clearColor = MTLClearColor(red: bg, green: bg, blue: bg, alpha: 1)
 
         // A still image has no reason to redraw at 120 Hz. Draw on demand only —
         // this is most of what "lightweight" means in practice.

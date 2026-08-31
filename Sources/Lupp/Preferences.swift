@@ -16,6 +16,12 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: scrollZoomKey) }
     }
 
+    /// Remembered so the panel stays where you left it between launches.
+    static var scopesPanelOpen: Bool {
+        get { UserDefaults.standard.bool(forKey: "scopesPanelOpen") }
+        set { UserDefaults.standard.set(newValue, forKey: "scopesPanelOpen") }
+    }
+
     /// Windows share one autosaved frame, so a new image opens at whatever size
     /// you were last working at and scales to fit it — rather than the window
     /// jumping to the image's dimensions every time you open a bigger file.
