@@ -28,6 +28,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private var hasSizedToImage = false
     private var currentLUTPath: String?
     private var currentPresetName: String?
+    /// Held between asking for an image and it arriving, since the grade can only
+    /// be applied once there is something to apply it to.
+    private var pendingSession: Session?
 
     private var scopesOpen: Bool {
         get { Preferences.scopesPanelOpen }
@@ -39,7 +42,19 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         set { Preferences.gradePanelOpen = newValue }
     }
 
+    /// Opens a saved session: the image it names, with the work restored.
+    convenience init(session url: URL) {
+        // A placeholder image path keeps the designated path single; the session
+        // immediately replaces it with the one it actually refers to.
+        self.init(url: url, deferOpening: true)
+        open(session: url)
+    }
+
     convenience init(url: URL) {
+        self.init(url: url, deferOpening: false)
+    }
+
+    private convenience init(url: URL, deferOpening: Bool) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -88,7 +103,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             }
         }
         refreshLibrary()
-        open(url: url)
+        if !deferOpening { open(url: url) }
     }
 
     private func buildContentView() {
@@ -542,6 +557,29 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         }
         sourceStats = Scopes.sourceStats(from: img)
         canvas.show(img)
+
+        if let session = pendingSession {
+            pendingSession = nil
+            var d = canvas.display
+            session.apply(to: &d)
+            canvas.display = d
+            canvas.cropAspect = nil
+            if let path = session.lutPath, FileManager.default.fileExists(atPath: path) {
+                applyLUT(at: URL(fileURLWithPath: path), announceFailure: false)
+            } else {
+                canvas.clearLUT()
+                currentLUTPath = nil
+            }
+            // Deferred so it lands after the load settles, like a preset does.
+            DispatchQueue.main.async { [weak self] in
+                self?.refreshLibrary()
+                self?.syncPanelControls()
+            }
+            window?.subtitle = subtitleForCurrent()
+            window?.makeFirstResponder(canvas)
+            return
+        }
+
         // Colour space comes from the file; the view transform is chosen from what
         // kind of file it is, because no file records one.
         canvas.display.viewTransform = Preferences.viewTransform(sceneLinear: img.isSceneLinear)
@@ -628,6 +666,71 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         guard siblings.count > 1 else { return }
         index = (index + delta + siblings.count) % siblings.count
         loadCurrent()
+    }
+
+    // MARK: - Sessions
+
+    /// Where this window's work came from, so Save can offer to overwrite it.
+    private var sessionURL: URL?
+
+    @objc func saveSession(_ sender: Any?) {
+        guard let img = canvas.image else { NSSound.beep(); return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(Session.typeIdentifier)
+            ?? UTType(filenameExtension: Session.fileExtension) ?? .json]
+        panel.nameFieldStringValue =
+            (sessionURL?.deletingPathExtension().lastPathComponent
+             ?? img.url.deletingPathExtension().lastPathComponent)
+            + "." + Session.fileExtension
+        panel.message = "Saves what you've done, and which image you did it to. The image itself isn't copied."
+        guard panel.runModal() == .OK, let out = panel.url else { return }
+
+        let session = Session.from(canvas.display, image: img.url, lutPath: currentLUTPath)
+        do {
+            try session.write(to: out)
+            sessionURL = out
+        } catch {
+            let a = NSAlert()
+            a.messageText = "Couldn’t save the session"
+            a.informativeText = error.localizedDescription
+            a.runModal()
+        }
+    }
+
+    /// Restores a session into this window: the image it names, then every value.
+    func open(session url: URL) {
+        let session: Session
+        do { session = try Session.read(from: url) } catch {
+            let a = NSAlert()
+            a.messageText = "Couldn’t read that session"
+            a.informativeText = error.localizedDescription
+            a.runModal()
+            return
+        }
+
+        let imageURL: URL
+        switch session.resolveImage() {
+        case .found(let u): imageURL = u
+        case .moved(let u):
+            imageURL = u
+            // Worth saying: the session still works, but it is no longer pointing
+            // where it says it is, and the next save will quietly correct that.
+            let a = NSAlert()
+            a.messageText = "The image has moved"
+            a.informativeText = "Found it at \(u.path). Saving this session again will record the new location."
+            a.runModal()
+        case .missing(let path):
+            let a = NSAlert()
+            a.messageText = "Can’t find the image this session refers to"
+            a.informativeText = "It was at \(path). A session records where an image lives rather than embedding it, so the file has to still be somewhere Lupp can reach."
+            a.runModal()
+            return
+        }
+
+        sessionURL = url
+        pendingSession = session
+        hasSizedToImage = true      // the window is the user's, not the session's
+        open(url: imageURL)
     }
 
     // MARK: - Export

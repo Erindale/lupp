@@ -26,6 +26,7 @@ enum Selftest {
         openingZoomRules(in: dir)
         scopesReadDisplayEncoded(in: dir)
         cubeLUTParses(in: dir)
+        sessionRoundTrips(in: dir)
         gpuPathIsExact(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
@@ -454,6 +455,72 @@ enum Selftest {
                   && near(back.sample(x: 0, y: 0)!.x, 1.0, tol: 0.01)
                   && near(back.sample(x: 2, y: 0)!.x, 0.2159, tol: 0.01),
               detail: "\(back.width)×\(back.height), red=\(back.sample(x: 0, y: 0)!.x)")
+    }
+
+    /// A session is only useful if reopening it puts you back exactly where you
+    /// were, so every field is set to something distinctive and checked coming
+    /// back — a value that silently reverts to its default would look like the
+    /// session merely not having saved much.
+    private static func sessionRoundTrips(in dir: URL) {
+        var d = Renderer.DisplayState()
+        d.viewTransform = .acesFilmic
+        d.exposureEV = -1.75
+        d.whiteBalance = SIMD3(1.31, 0.94, 0.77)
+        d.contrast = 1.42
+        d.contrastPivot = 0.21
+        d.blackPoint = 0.031
+        d.whitePoint = 0.87
+        d.tetra.red = SIMD4(0.9, 0.12, 0.05, 0)
+        d.tetra.cyan = SIMD4(0.04, 0.88, 0.93, 0)
+        d.tetraAmount = 0.63
+        d.tetraActive = true
+        d.lutAmount = 0.41
+        d.lutInput = .vLog
+        d.crop = SIMD4(0.11, 0.22, 0.55, 0.44)
+        d.cropEnabled = true
+        d.cropApplied = true
+        d.gradeEnabled = false
+        d.lightOn = false
+        d.whiteBalanceOn = true
+        d.tetraOn = false
+        d.lutOn = true
+        d.channel = .blue
+        d.showClipping = true
+        d.falseColour = false
+
+        let image = URL(fileURLWithPath: dir.appendingPathComponent("ref.png").path)
+        let url = dir.appendingPathComponent("s.\(Session.fileExtension)")
+        let written = Session.from(d, image: image, lutPath: "/tmp/x.cube")
+        guard (try? written.write(to: url)) != nil,
+              let back = try? Session.read(from: url) else {
+            return fail("session", "could not write or read back")
+        }
+
+        var r = Renderer.DisplayState()
+        back.apply(to: &r)
+
+        check("session restores the light section",
+              r.exposureEV == d.exposureEV && r.contrast == d.contrast
+                  && r.contrastPivot == d.contrastPivot && r.blackPoint == d.blackPoint
+                  && r.whitePoint == d.whitePoint && r.whiteBalance == d.whiteBalance,
+              detail: "EV \(r.exposureEV) contrast \(r.contrast) wb \(r.whiteBalance)")
+        check("session restores the cube corners and mix",
+              r.tetra == d.tetra && r.tetraAmount == d.tetraAmount && r.tetraActive,
+              detail: "red \(r.tetra.red) cyan \(r.tetra.cyan) mix \(r.tetraAmount)")
+        check("session restores the crop",
+              r.crop == d.crop && r.cropEnabled && r.cropApplied,
+              detail: "\(r.crop) enabled=\(r.cropEnabled) applied=\(r.cropApplied)")
+        check("session restores LUT choice, amount and input",
+              back.lutPath == "/tmp/x.cube" && r.lutAmount == d.lutAmount && r.lutInput == .vLog,
+              detail: "\(back.lutPath ?? "nil") amount \(r.lutAmount) input \(r.lutInput)")
+        check("session restores bypasses and view state",
+              r.gradeEnabled == false && r.lightOn == false && r.tetraOn == false
+                  && r.whiteBalanceOn && r.lutOn
+                  && r.channel == .blue && r.showClipping && !r.falseColour,
+              detail: "grade \(r.gradeEnabled) light \(r.lightOn) channel \(r.channel)")
+        check("session records which image it belongs to",
+              back.imagePath == image.path,
+              detail: back.imagePath)
     }
 
     // MARK: - Helpers

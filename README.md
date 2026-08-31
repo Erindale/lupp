@@ -328,6 +328,21 @@ hand pixels back, so an honest readout needs `AVPlayerItemVideoOutput` plus the
 YCbCr matrix and transfer function from the track — which is exactly where most
 tools quietly get the numbers wrong.
 
+## Sessions
+
+`File ▸ Save Session…` (⌘S) writes a `.luppsession` beside your work: which image
+you were editing, and every value you set — light, white balance, cube corners,
+LUT choice and amount and input, crop, bypasses, which channel you were looking
+at. Open one (⇧⌘O, or double-click) and it reopens that image with all of it
+live and still adjustable. It is a starting point restored, not a result frozen.
+
+**The image is referenced, not embedded.** A session beside a 200 MB EXR is a few
+kilobytes of numbers, and nothing is ever written back to your source. Both the
+path and a file-system bookmark are stored: the path is what you can read and fix
+in a text editor, the bookmark is what still finds the file after it has been
+moved or renamed. If the image is gone entirely, Lupp says where it was rather
+than opening something misleading.
+
 ## The icon
 
 The app ships a squircle, because macOS 26 composites a legacy `.icns` onto a

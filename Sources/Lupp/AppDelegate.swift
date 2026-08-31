@@ -45,6 +45,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls { present(url) }
     }
 
+    @objc func openSession(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [UTType(Session.typeIdentifier)
+            ?? UTType(filenameExtension: Session.fileExtension) ?? .json]
+        panel.message = "Open a saved session"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        present(url)
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     /// The window a new one should avoid landing exactly on top of — they all
@@ -52,6 +63,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var frontmostViewerFrame: NSRect? { controllers.last?.window?.frame }
 
     func present(_ url: URL) {
+        // A session names an image; opening one is opening that image with the
+        // work restored, so it goes through the same door.
+        if Session.isSession(url) {
+            let c = ViewerWindowController(session: url)
+            controllers.append(c)
+            c.showWindow(nil)
+            return
+        }
         let c = ViewerWindowController(url: url)
         controllers.append(c)
         c.showWindow(nil)
@@ -164,6 +183,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+        let openSess = fileMenu.addItem(withTitle: "Open Session…",
+                                        action: #selector(openSession(_:)), keyEquivalent: "o")
+        openSess.keyEquivalentModifierMask = [.command, .shift]
+        openSess.target = self
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Save Session…",
+                         action: #selector(ViewerWindowController.saveSession(_:)),
+                         keyEquivalent: "s")
         fileMenu.addItem(.separator())
         let exportItem = fileMenu.addItem(withTitle: "Export as Displayed…",
                                           action: #selector(ViewerWindowController.exportImage(_:)),

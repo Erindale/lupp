@@ -30,12 +30,29 @@ let plist: [String: Any] = [
     "NSHumanReadableCopyright": "MIT licensed.",
     // Alternate, not Default: being listed under "Open With" is the app's job;
     // actually taking over a file type stays the user's explicit choice.
-    "CFBundleDocumentTypes": [[
-        "CFBundleTypeName": "Image",
-        "CFBundleTypeRole": "Viewer",
-        "CFBundleTypeIconFile": "Lupp",
-        "LSHandlerRank": "Alternate",
-        "LSItemContentTypes": types,
+    "CFBundleDocumentTypes": [
+        [
+            "CFBundleTypeName": "Image",
+            "CFBundleTypeRole": "Viewer",
+            "CFBundleTypeIconFile": "Lupp",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": types,
+        ],
+        [
+            "CFBundleTypeName": "Lupp Session",
+            "CFBundleTypeRole": "Editor",
+            "CFBundleTypeIconFile": "Lupp",
+            // Owner, not Alternate: nothing else made these, so double-clicking
+            // one should come here.
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": ["xyz.nodegroup.lupp.session"],
+        ],
+    ],
+    "UTExportedTypeDeclarations": [[
+        "UTTypeIdentifier": "xyz.nodegroup.lupp.session",
+        "UTTypeDescription": "Lupp Session",
+        "UTTypeConformsTo": ["public.json", "public.data"],
+        "UTTypeTagSpecification": ["public.filename-extension": ["luppsession"]],
     ]],
 ]
 
