@@ -282,8 +282,14 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             currentLUTPath = nil
         }
         currentPresetName = p.name.isEmpty ? nil : p.name
-        refreshLibrary()
-        syncPanelControls()
+        // Deferred: this runs inside the preset button's own action, where the
+        // panel suppresses control updates so a click can't be stomped by its own
+        // side effects. Applying a preset is the one case that *must* move the
+        // controls, so it waits until the click has finished.
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshLibrary()
+            self?.syncPanelControls()
+        }
     }
 
     private func savePreset() {

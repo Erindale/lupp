@@ -120,8 +120,9 @@ absolute range, so a handle in the middle always means "unchanged" and its
 distance from the middle reads directly as deviation. That's why a default of
 0.000 and one of 1.000 both start centred.
 
-**Presets** store the view transform, exposure, LUT choice and all eighteen
-corner values. Window size and zoom are deliberately excluded — they're how you
+**Presets** store the view transform, the whole light section, LUT choice and all
+eighteen corner values — and applying one moves the sliders, so it lands as a
+starting point you can carry on adjusting rather than an opaque state. Window size and zoom are deliberately excluded — they're how you
 were looking at an image, not what you did to it. *Apply Last* puts back the
 grade you were most recently working in.
 

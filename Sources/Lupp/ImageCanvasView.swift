@@ -67,9 +67,18 @@ final class ImageCanvasView: MTKView {
         colorPixelFormat = .rgba16Float
         colorspace = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)
         (layer as? CAMetalLayer)?.wantsExtendedDynamicRangeContent = true
-        // Linear, because the drawable is extended-linear — the same colour the
-        // chrome uses, converted once in Theme so the two can't drift apart.
-        applyBackground()
+
+        // The surround is chrome, not image, so it is left to the window's own
+        // background rather than painted by Metal's clear colour.
+        //
+        // Painting it here made it update on a different clock from everything
+        // else: CALayer colours change within the current runloop pass, while a
+        // Metal clear colour only lands when the GPU next presents, so during a
+        // backdrop drag the canvas visibly trailed the panels around it. A
+        // transparent drawable puts both on the same clock.
+        (layer as? CAMetalLayer)?.isOpaque = false
+        layer?.backgroundColor = NSColor.clear.cgColor
+        clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
 
         // A still image has no reason to redraw at 120 Hz. Draw on demand only —
         // this is most of what "lightweight" means in practice.
@@ -113,6 +122,9 @@ final class ImageCanvasView: MTKView {
     required init(coder: NSCoder) { fatalError("not used") }
 
     override var isFlipped: Bool { true }
+    /// Transparent outside the image quad, so the window's background is what
+    /// fills the surround.
+    override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -316,9 +328,9 @@ final class ImageCanvasView: MTKView {
     /// True while the backdrop is being dragged, so the readout can show its value.
     var isAdjustingBackground: Bool { backgroundDragStart != nil }
 
+    /// Nothing to repaint here any more — the surround belongs to the window's
+    /// background layer, which the controller updates with the rest of the chrome.
     func applyBackground() {
-        let bg = Theme.backgroundLinear
-        clearColor = MTLClearColor(red: bg, green: bg, blue: bg, alpha: 1)
         needsDisplay = true
     }
 

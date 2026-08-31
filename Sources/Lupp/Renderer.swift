@@ -236,10 +236,11 @@ final class Renderer {
         guard let drawable = view.currentDrawable,
               let pass = view.currentRenderPassDescriptor else { return }
         // A visible lift while a file is over the window, so a drop reads as
-        // landing somewhere rather than being swallowed.
+        // landing somewhere rather than being swallowed. Semi-transparent, since
+        // the surround itself is now the window's background showing through.
         if dragHighlight {
-            let b = Theme.backgroundLinear * 2.2
-            pass.colorAttachments[0].clearColor = MTLClearColor(red: b, green: b, blue: b, alpha: 1)
+            pass.colorAttachments[0].clearColor =
+                MTLClearColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 0.22)
         }
         guard
               let cmd = queue.makeCommandBuffer(),
