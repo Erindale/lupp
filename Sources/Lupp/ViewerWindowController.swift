@@ -132,7 +132,6 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// The scopes toggle lives in the title bar's right-hand accessory slot, which
     /// is how AppKit puts a control up there without a custom title bar.
     private func buildTitlebarAccessory() {
-        gradeButton.image = Theme.gradeIcon()
         gradeButton.toolTip = "Colour — LUT, tetrahedral grade, presets, export"
         gradeButton.action = #selector(toggleGrade(_:))
 
@@ -356,7 +355,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         // Grey when closed, full strength when open — the accent colour read as
         // an alert rather than as a state, which is not what a view toggle says.
         scopesButton.contentTintColor = scopesOpen ? .labelColor : .secondaryLabelColor
-        gradeButton.alphaValue = gradeOpen ? 1 : 0.45
+        gradeButton.image = Theme.gradeIcon(active: gradeOpen)
 
         let scopesTarget: CGFloat = scopesOpen ? 0 : Theme.panelWidth
         let gradeTarget: CGFloat = gradeOpen ? 0 : Theme.panelWidth

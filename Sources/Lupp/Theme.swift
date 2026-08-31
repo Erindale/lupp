@@ -26,35 +26,62 @@ enum Theme {
 
     static let panelWidth: CGFloat = 320
 
-    /// The grade panel's title-bar icon: an "o" — a ring filled with a radial
-    /// gradient, echoing the app icon rather than borrowing a system glyph.
-    static func gradeIcon(size s: CGFloat = 15) -> NSImage {
-        NSImage(size: NSSize(width: s, height: s), flipped: false) { _ in
-            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            let c = CGPoint(x: s / 2, y: s / 2)
-            let outer = CGRect(x: 0.5, y: 0.5, width: s - 1, height: s - 1)
-            let t = s * 0.30                       // ring thickness
-            let inner = outer.insetBy(dx: t, dy: t)
+    /// The colour panel's title-bar icon: an "o" — a ring carrying a sweep from
+    /// dark to light all the way round, with a seam at the top.
+    ///
+    /// Drawn per pixel because CoreGraphics has linear and radial gradients but
+    /// no angular one, and because doing it by hand gives clean antialiasing on
+    /// both edges of the ring at 15pt.
+    ///
+    /// Active and inactive differ only in brightness — the same mark, lit or
+    /// dimmed — rather than being two different glyphs.
+    static func gradeIcon(size s: CGFloat = 15, active: Bool) -> NSImage {
+        // Never down to true black: on a dark title bar that half of the ring
+        // would simply disappear and the "o" would read as a "c".
+        let low: CGFloat = active ? 0.34 : 0.16
+        let high: CGFloat = active ? 1.0 : 0.46
 
-            let ring = CGMutablePath()
-            ring.addEllipse(in: outer)
-            ring.addEllipse(in: inner)
-            ctx.addPath(ring)
-            ctx.clip(using: .evenOdd)
+        let px = Int(s * 2)                        // @2x, then labelled as s points
+        let img = NSImage(size: NSSize(width: s, height: s))
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: px * 4, bitsPerPixel: 32)
+        else { return img }
 
-            let space = CGColorSpace(name: CGColorSpace.sRGB)!
-            let colours = [
-                CGColor(red: 0.42, green: 0.84, blue: 0.88, alpha: 1),
-                CGColor(red: 0.55, green: 0.35, blue: 0.90, alpha: 1),
-                CGColor(red: 1.00, green: 0.68, blue: 0.28, alpha: 1),
-            ] as CFArray
-            if let g = CGGradient(colorsSpace: space, colors: colours,
-                                  locations: [0, 0.55, 1]) {
-                ctx.drawRadialGradient(g, startCenter: c, startRadius: 0,
-                                       endCenter: c, endRadius: s / 2,
-                                       options: [.drawsAfterEndLocation])
+        guard let buf = rep.bitmapData else { return img }
+        let d = CGFloat(px)
+        let outerR = d / 2 - 1
+        let innerR = outerR * 0.52
+        let aa: CGFloat = 1.2
+
+        for y in 0..<px {
+            for x in 0..<px {
+                let dx = CGFloat(x) + 0.5 - d / 2
+                let dy = CGFloat(y) + 0.5 - d / 2
+                let r = (dx * dx + dy * dy).squareRoot()
+
+                // Inside the annulus, softened at both edges.
+                let outerA = min(max((outerR - r) / aa + 0.5, 0), 1)
+                let innerA = min(max((r - innerR) / aa + 0.5, 0), 1)
+                let alpha = outerA * innerA
+                guard alpha > 0.001 else { continue }
+
+                // A bitmap rep's y runs downward, so negate it to get "up", then
+                // measure clockwise from north — putting the seam at the top and
+                // running light into dark the way round the reference does.
+                var a = atan2(dx, -dy)
+                if a < 0 { a += 2 * .pi }
+                let v = high - (high - low) * (a / (2 * .pi))
+
+                // Premultiplied, which is what an NSBitmapImageRep expects.
+                let g = UInt8(min(max(v, 0), 1) * alpha * 255)
+                let o = (y * px + x) * 4
+                buf[o] = g; buf[o + 1] = g; buf[o + 2] = g
+                buf[o + 3] = UInt8(alpha * 255)
             }
-            return true
         }
+        img.addRepresentation(rep)
+        return img
     }
 }
