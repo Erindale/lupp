@@ -36,7 +36,7 @@ struct Preset: Codable, Equatable {
                lutAmount: d.lutAmount,
                tetra: Preset.flatten(d.tetra),
                tetraAmount: d.tetraAmount,
-               tetraEnabled: d.tetraEnabled,
+               tetraEnabled: d.tetraActive,
                whiteBalance: [d.whiteBalance.x, d.whiteBalance.y, d.whiteBalance.z],
                contrast: d.contrast,
                contrastPivot: d.contrastPivot,
@@ -51,7 +51,7 @@ struct Preset: Codable, Equatable {
         d.lutAmount = lutAmount
         d.tetra = Preset.unflatten(tetra)
         d.tetraAmount = tetraAmount
-        d.tetraEnabled = tetraEnabled
+        d.tetraActive = tetraEnabled
         if let w = whiteBalance, w.count == 3 { d.whiteBalance = SIMD3(w[0], w[1], w[2]) }
         else { d.whiteBalance = SIMD3(1, 1, 1) }
         d.contrast = contrast ?? 1

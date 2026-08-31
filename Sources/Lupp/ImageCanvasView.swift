@@ -376,6 +376,7 @@ final class ImageCanvasView: MTKView {
         case "e": exposureEV += 0.25
         case "E": exposureEV -= 0.25
         case "r": exposureEV = 0
+        case "b": display.gradeEnabled.toggle()
         case "c": display.showClipping.toggle()
         case "f": display.falseColour.toggle()
         // Bare keys, handled here rather than as menu key equivalents: a menu

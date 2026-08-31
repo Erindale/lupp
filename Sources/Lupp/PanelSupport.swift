@@ -14,10 +14,19 @@ class SidePanel: NSView {
     /// to switch off: the deselect was undone before the mouse came up.
     private(set) var handlingControlAction = false
 
+    /// Asked to re-read the state once a click has finished.
+    var onResync: (() -> Void)?
+
+    /// Suppressing the sync during the action is only half the answer: the other
+    /// half is doing it afterwards. Without this, anything the action changed
+    /// *elsewhere* in the panel — a LUT's name, whether its slider is live, which
+    /// entry the popup shows — was simply never picked up, because the only sync
+    /// that would have caught it was the one being suppressed.
     func emit(_ body: () -> Void) {
         handlingControlAction = true
         body()
         handlingControlAction = false
+        DispatchQueue.main.async { [weak self] in self?.onResync?() }
     }
 
     init() {
@@ -105,11 +114,18 @@ class SidePanel: NSView {
         return f
     }
 
-    /// A section title with a reset control at the right end.
+    /// A section title with an optional A/B toggle at the left and a reset at the
+    /// right.
     ///
-    /// Per section rather than one blanket reset, because undoing a white balance
-    /// experiment shouldn't cost you the cube warp you were happy with.
-    func sectionHeader(_ t: String, reset: @escaping () -> Void) -> NSView {
+    /// Per section rather than one blanket control, because comparing one change
+    /// at a time is the whole point — and undoing a white balance experiment
+    /// shouldn't cost you the cube warp you were happy with.
+    func sectionHeader(_ t: String, toggle: ((Bool) -> Void)? = nil,
+                       reset: @escaping () -> Void) -> SectionHeader {
+        SectionHeader(title: t.uppercased(), toggle: toggle, reset: reset)
+    }
+
+    private func unusedSectionHeader(_ t: String, reset: @escaping () -> Void) -> NSView {
         let row = NSView()
         row.translatesAutoresizingMaskIntoConstraints = false
         let label = sectionLabel(t)
@@ -176,6 +192,84 @@ class SidePanel: NSView {
         v.translatesAutoresizingMaskIntoConstraints = false
         return v
     }
+}
+
+/// A section title row: an optional A/B checkbox, the title, and a reset arrow.
+final class SectionHeader: NSView {
+    private let check: NSButton?
+    private let label: ThemedLabel
+
+    var isOn: Bool {
+        get { check?.state == .on }
+        set { check?.state = newValue ? .on : .off }
+    }
+
+    init(title: String, toggle: ((Bool) -> Void)?, reset: @escaping () -> Void) {
+        label = ThemedLabel(title, role: .tertiary, size: 9, weight: .semibold)
+        if let toggle {
+            let b = ActionButton(action: {})
+            b.setButtonType(.switch)
+            b.title = ""
+            b.controlSize = .small
+            check = b
+        } else {
+            check = nil
+        }
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        if let check, let toggle {
+            // Re-target now that self exists, so the closure can read the state.
+            check.target = self
+            check.action = #selector(toggled)
+            self.toggleHandler = toggle
+        }
+
+        let resetButton = ActionButton(action: reset)
+        resetButton.image = NSImage(systemSymbolName: "arrow.counterclockwise",
+                                    accessibilityDescription: "Reset \(title)")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        resetButton.imagePosition = .imageOnly
+        resetButton.isBordered = false
+        resetButton.bezelStyle = .texturedRounded
+        resetButton.contentTintColor = Theme.text(.tertiary)
+        resetButton.toolTip = "Reset \(title.lowercased()) to defaults"
+
+        var views: [NSView] = []
+        if let check { views.append(check) }
+        views.append(contentsOf: [label, resetButton])
+        for v in views {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+
+        var c: [NSLayoutConstraint] = [
+            heightAnchor.constraint(equalToConstant: 16),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            resetButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            resetButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            resetButton.widthAnchor.constraint(equalToConstant: 16),
+            resetButton.heightAnchor.constraint(equalToConstant: 14),
+        ]
+        if let check {
+            check.state = .on
+            check.toolTip = "Bypass \(title.lowercased()) — compare with and without"
+            c += [
+                check.leadingAnchor.constraint(equalTo: leadingAnchor),
+                check.centerYAnchor.constraint(equalTo: centerYAnchor),
+                label.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 2),
+            ]
+        } else {
+            c.append(label.leadingAnchor.constraint(equalTo: leadingAnchor))
+        }
+        NSLayoutConstraint.activate(c)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private var toggleHandler: ((Bool) -> Void)?
+
+    @objc private func toggled() { toggleHandler?(isOn) }
 }
 
 /// An NSButton that carries its own closure, so callers don't each need a

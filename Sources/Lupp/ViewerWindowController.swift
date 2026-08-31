@@ -177,6 +177,16 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     private func wireScopesPanel() {
+        // One rule for both panels: after any control action settles, re-read
+        // everything. Individual actions never have to remember what else they
+        // might have changed.
+        let resync: () -> Void = { [weak self] in
+            self?.refreshLibrary()
+            self?.syncPanelControls()
+        }
+        grade.onResync = resync
+        scopes.onResync = resync
+
         scopes.onChannel = { [weak self] ch in
             self?.canvas.display.channel = ch
         }
@@ -209,7 +219,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             guard let self else { return }
             self.canvas.display.tetra = corners
             self.canvas.display.tetraAmount = amount
-            self.canvas.display.tetraEnabled = enabled
+            self.canvas.display.tetraActive = enabled
             self.rememberGrade()
         }
         grade.onLight = { [weak self] ev, wb, contrast, pivot, black, white in
@@ -223,6 +233,18 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             d.whitePoint = white
             self.canvas.display = d          // one write, one refresh
             self.rememberGrade()
+        }
+        grade.onBypass = { [weak self] section, on in
+            guard let self else { return }
+            var d = self.canvas.display
+            switch section {
+            case .master:       d.gradeEnabled = on
+            case .light:        d.lightOn = on
+            case .whiteBalance: d.whiteBalanceOn = on
+            case .tetra:        d.tetraOn = on
+            case .lut:          d.lutOn = on
+            }
+            self.canvas.display = d
         }
         grade.onSavePreset = { [weak self] in self?.savePreset() }
         grade.onUsePreset = { [weak self] name in
@@ -255,6 +277,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         currentLUTPath = nil
         Preferences.lastLUTPath = nil
         rememberGrade()
+        refreshLibrary()
     }
 
     private func refreshLibrary() {
@@ -282,14 +305,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             currentLUTPath = nil
         }
         currentPresetName = p.name.isEmpty ? nil : p.name
-        // Deferred: this runs inside the preset button's own action, where the
-        // panel suppresses control updates so a click can't be stomped by its own
-        // side effects. Applying a preset is the one case that *must* move the
-        // controls, so it waits until the click has finished.
-        DispatchQueue.main.async { [weak self] in
-            self?.refreshLibrary()
-            self?.syncPanelControls()
-        }
+        // The panel's deferred resync picks the controls up once the click that
+        // triggered this has finished.
     }
 
     private func savePreset() {

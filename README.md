@@ -98,6 +98,12 @@ with the reference transforms.
 The colour panel reads top to bottom in the order the pixels travel: light, then
 the cube warp, then a LUT on top, then what to do with the result.
 
+**Every section has an A/B switch** beside its title, and there's a master one at
+the top (`B`). A bypassed section keeps its values and simply stops being applied,
+so comparing costs nothing and switching back returns exactly where you were —
+and you can isolate one change at a time rather than judging the whole grade at
+once.
+
 **Light** — black and white point, exposure (EV), a three-channel white balance,
 and a contrast with an adjustable pivot. Black and white point come first, since
 they say what counts as black and white in the source and everything after works

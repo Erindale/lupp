@@ -85,6 +85,18 @@ final class Renderer {
         /// Levels remap applied before everything else. 0 and 1 are a no-op.
         var blackPoint: Float = 0
         var whitePoint: Float = 1
+
+        // A/B bypasses. Nothing is discarded when a section is switched off —
+        // its values stay put and simply stop being applied, so comparing costs
+        // nothing and toggling back returns exactly where you were.
+        var gradeEnabled = true
+        var lightOn = true
+        var whiteBalanceOn = true
+        var tetraOn = true
+        var lutOn = true
+        /// Set by the panel when the corners are away from identity; there is
+        /// nothing to apply when they are not.
+        var tetraActive = false
         var viewTransform: ViewTransform = .standard
         var channel: ChannelView = .rgb
         var showClipping = false
@@ -93,7 +105,6 @@ final class Renderer {
         var lutName: String?
         var tetra = TetraCorners()
         var tetraAmount: Float = 1
-        var tetraEnabled = false
     }
 
     init?(pixelFormat: MTLPixelFormat) {
@@ -411,25 +422,34 @@ final class Renderer {
     private func uniforms(for display: DisplayState, rect: SIMD4<Float>,
                           checkerSize: Float, showChecker: UInt32,
                           encodeOutput: UInt32) -> Uniforms {
-        Uniforms(rect: rect,
+        // Bypasses are resolved here rather than in the shader: a switched-off
+        // section is simply fed its identity values, so there is one code path
+        // through the fragment function and no branch that can drift.
+        let master = display.gradeEnabled
+        let light = master && display.lightOn
+        let balance = master && display.whiteBalanceOn
+        let tetra = master && display.tetraOn && display.tetraActive
+        let lut = master && display.lutOn && lutTexture != nil
+
+        return Uniforms(rect: rect,
                  lutDomainMin: lutDomainMin,
                  lutDomainMax: lutDomainMax,
-                 whiteBalance: SIMD4(display.whiteBalance, 0),
-                 exposure: pow(2, display.exposureEV),
+                 whiteBalance: balance ? SIMD4(display.whiteBalance, 0) : SIMD4(1, 1, 1, 0),
+                 exposure: light ? pow(2, display.exposureEV) : 1,
                  checkerSize: checkerSize,
                  lutAmount: display.lutAmount,
-                 contrast: display.contrast,
+                 contrast: light ? display.contrast : 1,
                  contrastPivot: display.contrastPivot,
                  tetraAmount: display.tetraAmount,
-                 blackPoint: display.blackPoint,
-                 whitePoint: display.whitePoint,
+                 blackPoint: light ? display.blackPoint : 0,
+                 whitePoint: light ? display.whitePoint : 1,
                  showChecker: showChecker,
                  viewTransform: UInt32(display.viewTransform.rawValue),
                  channel: UInt32(display.channel.rawValue),
                  showClipping: display.showClipping ? 1 : 0,
                  falseColour: display.falseColour ? 1 : 0,
-                 lutEnabled: lutTexture != nil ? 1 : 0,
-                 tetraEnabled: display.tetraEnabled ? 1 : 0,
+                 lutEnabled: lut ? 1 : 0,
+                 tetraEnabled: tetra ? 1 : 0,
                  encodeOutput: encodeOutput)
     }
 

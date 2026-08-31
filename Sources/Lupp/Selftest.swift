@@ -312,7 +312,7 @@ enum Selftest {
 
         // Identity corners must be a true no-op, or every grade starts skewed.
         var identity = plain
-        identity.tetraEnabled = true
+        identity.tetraActive = true
         guard let q = pixels(identity) else { return fail("GPU tetra", "export failed") }
         let same = zip(p, q).allSatisfy { a, b in
             zip(a, b).allSatisfy { abs(Int($0) - Int($1)) <= 1 }

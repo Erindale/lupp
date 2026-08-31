@@ -7,6 +7,9 @@ import simd
 /// this one changes the pixels, the inspector only reports on them — and because
 /// wanting to grade is not the same as wanting to watch scopes while you do it.
 final class GradePanel: SidePanel {
+    /// Which part of the chain a bypass switch belongs to.
+    enum Section { case master, light, whiteBalance, tetra, lut }
+
     var onLoadLUT: (() -> Void)?
     var onClearLUT: (() -> Void)?
     var onLUTAmount: ((Float) -> Void)?
@@ -20,6 +23,7 @@ final class GradePanel: SidePanel {
     var onDeletePreset: ((String) -> Void)?
     var onApplyLast: (() -> Void)?
     var onExport: (() -> Void)?
+    var onBypass: ((Section, Bool) -> Void)?
 
     private let lutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let lutButtons = NSSegmentedControl(labels: ["Add…", "Remove", "Off"],
@@ -50,6 +54,12 @@ final class GradePanel: SidePanel {
 
     private let exportButton = NSButton(title: "Export as Displayed…",
                                         target: nil, action: nil)
+
+    private let masterToggle = NSButton()
+    private var lightHeader: SectionHeader!
+    private var wbHeader: SectionHeader!
+    private var tetraHeader: SectionHeader!
+    private var lutHeader: SectionHeader!
 
     override init() {
         super.init()
@@ -100,14 +110,35 @@ final class GradePanel: SidePanel {
 
         let lightNote = caption("Linear, before the view transform — these behave like light, not like edits to a finished picture. Black and white point set what counts as black and white first; contrast pivots on 0.18 scene grey.")
 
-        let lightHeader = sectionHeader("Light") { [weak self] in self?.resetLight() }
-        let wbHeader = sectionHeader("White balance") { [weak self] in self?.resetWhiteBalance() }
-        let tetraHeader = sectionHeader("Grade — tetrahedral") { [weak self] in self?.resetTetra() }
-        let lutHeader = sectionHeader("LUT") { [weak self] in
-            self?.emit { self?.onClearLUT?() }
-        }
+        lightHeader = sectionHeader("Light",
+                                    toggle: { [weak self] on in
+                                        self?.emit { self?.onBypass?(.light, on) } },
+                                    reset: { [weak self] in self?.resetLight() })
+        wbHeader = sectionHeader("White balance",
+                                 toggle: { [weak self] on in
+                                     self?.emit { self?.onBypass?(.whiteBalance, on) } },
+                                 reset: { [weak self] in self?.resetWhiteBalance() })
+        tetraHeader = sectionHeader("Grade — tetrahedral",
+                                    toggle: { [weak self] on in
+                                        self?.emit { self?.onBypass?(.tetra, on) } },
+                                    reset: { [weak self] in self?.resetTetra() })
+        lutHeader = sectionHeader("LUT",
+                                  toggle: { [weak self] on in
+                                      self?.emit { self?.onBypass?(.lut, on) } },
+                                  reset: { [weak self] in self?.emit { self?.onClearLUT?() } })
+
+        masterToggle.setButtonType(.switch)
+        masterToggle.title = "  Grading enabled   (B)"
+        masterToggle.font = .systemFont(ofSize: 11)
+        masterToggle.state = .on
+        masterToggle.target = self
+        masterToggle.action = #selector(masterToggled)
+        masterToggle.translatesAutoresizingMaskIntoConstraints = false
 
         var column: [NSView] = [
+            masterToggle,
+            caption("Every switch below bypasses its section without discarding it — toggling back returns exactly where you were."),
+            separator(),
             lightHeader, blackRow, whiteRow, exposureRow, contrastRow, pivotRow,
             wbHeader, wbRows[0], wbRows[1], wbRows[2],
             lightNote,
@@ -130,7 +161,7 @@ final class GradePanel: SidePanel {
                 fullWidth: [lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
                             tetraAmount, tetraNote, lightNote, savePresetButton,
                             presetPopup, presetButtons, exportButton, exportNote,
-                            lightHeader, wbHeader, tetraHeader, lutHeader]
+                            lightHeader, wbHeader, tetraHeader, lutHeader, masterToggle]
                         + tetraRowViews + lightRows + balanceRows)
     }
 
@@ -176,6 +207,10 @@ final class GradePanel: SidePanel {
         let amount = Float(tetraAmount.doubleValue / 100)
         // Identity corners mean there is nothing to apply, so don't pay for it.
         emit { onTetra?(corners, amount, !corners.isIdentity) }
+    }
+
+    @objc private func masterToggled() {
+        emit { onBypass?(.master, masterToggle.state == .on) }
     }
 
     @objc private func savePresetPressed(_ sender: Any?) {
@@ -268,7 +303,24 @@ final class GradePanel: SidePanel {
     }
 
     func show(display: Renderer.DisplayState) {
+        // Bypass switches and the LUT readout are safe to refresh at any time:
+        // none of them is the control being clicked.
+        masterToggle.state = display.gradeEnabled ? .on : .off
+        lightHeader.isOn = display.lightOn
+        wbHeader.isOn = display.whiteBalanceOn
+        tetraHeader.isOn = display.tetraOn
+        lutHeader.isOn = display.lutOn
+
+        if let name = display.lutName {
+            lutLabel.stringValue = name
+            lutSlider.isEnabled = true
+        } else {
+            lutLabel.stringValue = "No LUT"
+            lutSlider.isEnabled = false
+        }
+
         guard !handlingControlAction else { return }
+        lutSlider.doubleValue = Double(display.lutAmount) * 100
         let v = TetraLayout.values(from: display.tetra)
         for row in tetraRows { row.value = v[row.corner][row.component] }
         tetraAmount.doubleValue = Double(display.tetraAmount) * 100
@@ -281,13 +333,5 @@ final class GradePanel: SidePanel {
         wbRows[1].value = display.whiteBalance.y
         wbRows[2].value = display.whiteBalance.z
 
-        if let name = display.lutName {
-            lutLabel.stringValue = name
-            lutSlider.isEnabled = true
-            lutSlider.doubleValue = Double(display.lutAmount) * 100
-        } else {
-            lutLabel.stringValue = "No LUT"
-            lutSlider.isEnabled = false
-        }
     }
 }
