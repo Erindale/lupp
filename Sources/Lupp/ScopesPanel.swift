@@ -1,15 +1,32 @@
 import AppKit
 import simd
 
-/// Right-hand diagnostics panel: histogram, RGB parade, vectorscope, statistics.
+/// Right-hand panel: display controls at the top, scopes in the middle, what the
+/// file is and how it's being shown at the bottom.
 final class ScopesPanel: NSView {
+    var onChannel: ((ChannelView) -> Void)?
+    var onClipping: ((Bool) -> Void)?
+    var onFalseColour: ((Bool) -> Void)?
+    var onViewTransform: ((ViewTransform) -> Void)?
+
+    private let channelControl = NSSegmentedControl(
+        labels: ChannelView.allCases.map(\.label),
+        trackingMode: .selectOne, target: nil, action: nil)
+    private let clippingBox = NSButton(checkboxWithTitle: "Clipping", target: nil, action: nil)
+    private let falseColourBox = NSButton(checkboxWithTitle: "False colour", target: nil, action: nil)
+
     private let histogram = ScopeView(title: "Histogram", heightRatio: 0.42)
+    private let waveform = ScopeView(title: "Waveform (luma)", heightRatio: 0.42)
+    private let cie = CIEView(title: "CIE 1931 xy", heightRatio: 1)
     private let paradeMode = NSSegmentedControl(labels: ["Split", "Combined"],
                                                 trackingMode: .selectOne, target: nil, action: nil)
     private lazy var parade = ScopeView(title: "RGB Parade", heightRatio: 0.42,
                                         accessory: paradeMode)
     private let vectorscope = VectorscopeView(title: "Vectorscope", heightRatio: 1)
     private let stats = NSTextField(labelWithString: "")
+
+    private let transformPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let transformNote = NSTextField(labelWithString: "")
     private let note = NSTextField(labelWithString: "Scopes read sRGB-encoded values.")
 
     /// Held so switching parade mode is instant — both rasters already exist.
@@ -17,6 +34,9 @@ final class ScopesPanel: NSView {
 
     init() {
         super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = Theme.background.cgColor
+
         paradeMode.segmentStyle = .rounded
         paradeMode.controlSize = .mini
         paradeMode.font = .systemFont(ofSize: 9)
@@ -26,23 +46,43 @@ final class ScopesPanel: NSView {
         // Neutral rather than the system accent: in a scopes panel a saturated
         // highlight reads as a colour cue about the image, not about the control.
         paradeMode.selectedSegmentBezelColor = NSColor(white: 0.42, alpha: 1)
-        wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
 
-        let stack = NSStackView(views: [histogram, parade, vectorscope, stats, note])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 14
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let channelRow = buildChannelRow()
+        let overlayRow = NSStackView(views: [clippingBox, falseColourBox])
+        overlayRow.orientation = .horizontal
+        overlayRow.spacing = 14
+        for b in [clippingBox, falseColourBox] {
+            b.target = self
+            b.action = #selector(overlayChanged(_:))
+            b.font = .systemFont(ofSize: 10)
+            b.controlSize = .small
+        }
+
+        buildTransformControls()
 
         stats.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         stats.textColor = .secondaryLabelColor
         stats.lineBreakMode = .byWordWrapping
         stats.maximumNumberOfLines = 0
+        for f in [note, transformNote] {
+            f.font = .systemFont(ofSize: 9)
+            f.textColor = .tertiaryLabelColor
+            f.lineBreakMode = .byWordWrapping
+            f.maximumNumberOfLines = 0
+        }
 
-        note.font = .systemFont(ofSize: 9)
-        note.textColor = .tertiaryLabelColor
+        let stack = NSStackView(views: [
+            channelRow, overlayRow,
+            histogram, waveform, parade, vectorscope, cie,
+            stats,
+            separator(), transformPopup, transformNote, note,
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.setCustomSpacing(6, after: channelRow)
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 14, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -57,7 +97,7 @@ final class ScopesPanel: NSView {
         scroll.documentView = doc
         addSubview(scroll)
 
-        NSLayoutConstraint.activate([
+        var c: [NSLayoutConstraint] = [
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -68,27 +108,109 @@ final class ScopesPanel: NSView {
             stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
+        ]
+        for v in [channelControl, histogram, waveform, parade, vectorscope, cie, stats,
+                  transformPopup, transformNote, note] as [NSView] {
+            c.append(v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28))
+        }
+        NSLayoutConstraint.activate(c)
 
-            histogram.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
-            parade.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
-            vectorscope.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
-            stats.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
-        ])
+        syncControls()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func update(with s: Scopes?, image: FloatImage?) {
-        current = s
-        histogram.content = s?.histogram
-        vectorscope.content = s?.vectorscope
-        applyParadeMode()
-        stats.stringValue = s.map { text(for: $0, image: image) } ?? "No image."
+    // MARK: - Controls
+
+    /// One segmented row of equal-width cells, as Blender's image editor does it.
+    /// Radio buttons were the literal request but read as a form control and, on
+    /// macOS, paint their dot in the system accent — which is the coloured
+    /// distraction this panel is meant not to have.
+    private func buildChannelRow() -> NSView {
+        channelControl.segmentDistribution = .fillEqually
+        channelControl.segmentStyle = .rounded
+        channelControl.controlSize = .regular
+        channelControl.font = .systemFont(ofSize: 11)
+        channelControl.selectedSegment = 0
+        channelControl.target = self
+        channelControl.action = #selector(channelChanged(_:))
+        channelControl.selectedSegmentBezelColor = NSColor(white: 0.44, alpha: 1)
+        channelControl.translatesAutoresizingMaskIntoConstraints = false
+        return channelControl
+    }
+
+    private func buildTransformControls() {
+        transformPopup.controlSize = .small
+        transformPopup.font = .systemFont(ofSize: 11)
+        transformPopup.target = self
+        transformPopup.action = #selector(transformChanged(_:))
+        for t in ViewTransform.allCases {
+            transformPopup.addItem(withTitle: t.label)
+            transformPopup.lastItem?.tag = t.rawValue
+        }
+    }
+
+    private func separator() -> NSView {
+        let v = NSBox()
+        v.boxType = .separator
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }
+
+    @objc private func channelChanged(_ sender: NSSegmentedControl) {
+        guard let ch = ChannelView(rawValue: sender.selectedSegment) else { return }
+        onChannel?(ch)
+    }
+
+    @objc private func overlayChanged(_ sender: NSButton) {
+        onClipping?(clippingBox.state == .on)
+        onFalseColour?(falseColourBox.state == .on)
+    }
+
+    @objc private func transformChanged(_ sender: NSPopUpButton) {
+        guard let t = ViewTransform(rawValue: sender.selectedTag()) else { return }
+        onViewTransform?(t)
     }
 
     @objc private func paradeModeChanged(_ sender: NSSegmentedControl) {
         Preferences.paradeCombined = sender.selectedSegment == 1
         applyParadeMode()
+    }
+
+    private func syncControls() {
+        channelControl.selectedSegment = 0
+    }
+
+    /// Reflect the state the canvas is actually in, so the panel can't drift out
+    /// of sync with what's on screen after an image loads and re-detects.
+    func show(display: Renderer.DisplayState, detected: ViewTransform?, sceneLinear: Bool) {
+        channelControl.selectedSegment = display.channel.rawValue
+        clippingBox.state = display.showClipping ? .on : .off
+        falseColourBox.state = display.falseColour ? .on : .off
+        transformPopup.selectItem(withTag: display.viewTransform.rawValue)
+
+        if let detected {
+            let source = sceneLinear
+                ? "Scene-linear file — no view transform is recorded in it, so this is the default for linear sources."
+                : "Display-referred file — already graded, so no tone map is applied."
+            transformNote.stringValue = display.viewTransform == detected
+                ? source
+                : "Overriding the detected \(detected.label). \(display.viewTransform.detail)"
+        } else {
+            transformNote.stringValue = ""
+        }
+    }
+
+    // MARK: - Scopes
+
+    func update(with s: Scopes?, image: FloatImage?) {
+        current = s
+        histogram.content = s?.histogram
+        waveform.content = s?.waveform
+        cie.content = s?.cie
+        vectorscope.content = s?.vectorscope
+        applyParadeMode()
+        stats.stringValue = s.map { text(for: $0, image: image) } ?? "No image."
     }
 
     private func applyParadeMode() {
@@ -118,6 +240,7 @@ final class ScopesPanel: NSView {
         }
         if let i = image {
             lines.append("")
+            lines.append("\(i.sourceColorSpace)")
             lines.append("sampled \(st.sampleCount) of \(i.width * i.height) px")
         }
         return lines.joined(separator: "\n")
@@ -173,12 +296,13 @@ private class ScopeView: NSView {
         Theme.scopeBackground.setFill()
         path.fill()
 
-        guard let img = content else { return }
-        ctx.saveGState()
-        path.addClip()
-        ctx.interpolationQuality = .high
-        ctx.draw(img, in: r)
-        ctx.restoreGState()
+        if let img = content {
+            ctx.saveGState()
+            path.addClip()
+            ctx.interpolationQuality = .high
+            ctx.draw(img, in: r)
+            ctx.restoreGState()
+        }
 
         NSColor.white.withAlphaComponent(0.06).setStroke()
         path.lineWidth = 1
@@ -202,7 +326,6 @@ private final class VectorscopeView: ScopeView {
         let y = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z
         let cb = (e.z - y) / 1.8556
         let cr = (e.x - y) / 1.5748
-        // The raster puts cb across and cr up; the view is y-up, so cr maps directly.
         return NSPoint(x: r.minX + CGFloat(cb + 0.5) * r.width,
                        y: r.minY + CGFloat(cr + 0.5) * r.height)
     }
@@ -229,19 +352,79 @@ private final class VectorscopeView: ScopeView {
             c.stroke()
         }
 
+        // Skin-tone line: the I axis at roughly 123°, which faces read along
+        // regardless of complexion. Resolve draws the same reference.
+        let angle = 123.0 * .pi / 180
+        let reach = side * 0.42
+        let skin = NSBezierPath()
+        skin.move(to: NSPoint(x: square.midX, y: square.midY))
+        skin.line(to: NSPoint(x: square.midX + cos(angle) * reach,
+                              y: square.midY + sin(angle) * reach))
+        skin.lineWidth = 1
+        NSColor(srgbRed: 1, green: 0.75, blue: 0.65, alpha: 0.42).setStroke()
+        skin.stroke()
+
         for (name, rgb) in VectorscopeView.targets {
             let p = position(of: rgb, in: square)
-            let box = NSRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)
             NSColor.white.withAlphaComponent(0.5).setStroke()
-            let b = NSBezierPath(rect: box)
+            let b = NSBezierPath(rect: NSRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6))
             b.lineWidth = 1
             b.stroke()
-
-            let attrs: [NSAttributedString.Key: Any] = [
+            (name as NSString).draw(at: NSPoint(x: p.x + 5, y: p.y - 4), withAttributes: [
                 .font: NSFont.systemFont(ofSize: 8),
                 .foregroundColor: NSColor.white.withAlphaComponent(0.45),
-            ]
-            (name as NSString).draw(at: NSPoint(x: p.x + 5, y: p.y - 4), withAttributes: attrs)
+            ])
         }
+    }
+}
+
+/// CIE 1931 xy scope: where the image's colours actually sit, against the
+/// spectral locus and the gamuts they might be claiming to use.
+private final class CIEView: ScopeView {
+    private func point(_ p: CGPoint, in r: NSRect) -> NSPoint {
+        NSPoint(x: r.minX + p.x / CIE.xMax * r.width,
+                y: r.minY + p.y / CIE.yMax * r.height)
+    }
+
+    override func drawOverlay(in r: NSRect, ctx: CGContext) {
+        // Spectral locus, closed by the line of purples.
+        let locus = NSBezierPath()
+        for (i, p) in CIE.spectralLocus.enumerated() {
+            let v = point(p, in: r)
+            if i == 0 { locus.move(to: v) } else { locus.line(to: v) }
+        }
+        locus.close()
+        locus.lineWidth = 1
+        NSColor.white.withAlphaComponent(0.28).setStroke()
+        locus.stroke()
+
+        let styles: [(CGFloat, [CGFloat])] = [(0.55, []), (0.42, [3, 2]), (0.34, [1, 2])]
+        for (i, g) in CIE.gamuts.enumerated() {
+            let tri = NSBezierPath()
+            tri.move(to: point(g.red, in: r))
+            tri.line(to: point(g.green, in: r))
+            tri.line(to: point(g.blue, in: r))
+            tri.close()
+            tri.lineWidth = 1
+            let (alpha, dash) = styles[min(i, styles.count - 1)]
+            if !dash.isEmpty { tri.setLineDash(dash, count: dash.count, phase: 0) }
+            NSColor.white.withAlphaComponent(alpha).setStroke()
+            tri.stroke()
+
+            let label = point(g.green, in: r)
+            (g.name as NSString).draw(at: NSPoint(x: label.x + 3, y: label.y - 2),
+                                      withAttributes: [
+                .font: NSFont.systemFont(ofSize: 8),
+                .foregroundColor: NSColor.white.withAlphaComponent(alpha),
+            ])
+        }
+
+        let w = point(CIE.d65, in: r)
+        NSColor.white.withAlphaComponent(0.7).setStroke()
+        let cross = NSBezierPath()
+        cross.move(to: NSPoint(x: w.x - 3, y: w.y)); cross.line(to: NSPoint(x: w.x + 3, y: w.y))
+        cross.move(to: NSPoint(x: w.x, y: w.y - 3)); cross.line(to: NSPoint(x: w.x, y: w.y + 3))
+        cross.lineWidth = 1
+        cross.stroke()
     }
 }

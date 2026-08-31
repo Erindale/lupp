@@ -114,9 +114,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Preferences.scrollWheelZooms.toggle()
     }
 
+    @objc func toggleInvertScrollZoom(_ sender: Any?) {
+        Preferences.invertScrollZoom.toggle()
+    }
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleScrollWheelZooms(_:)) {
             item.state = Preferences.scrollWheelZooms ? .on : .off
+        }
+        if item.action == #selector(toggleInvertScrollZoom(_:)) {
+            item.state = Preferences.invertScrollZoom ? .on : .off
         }
         return true
     }
@@ -187,6 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let scrollToggle = viewMenu.addItem(withTitle: "Scroll Wheel Zooms",
                                             action: #selector(toggleScrollWheelZooms(_:)), keyEquivalent: "")
         scrollToggle.target = self
+        let invertToggle = viewMenu.addItem(withTitle: "Invert Scroll Zoom Direction",
+                                            action: #selector(toggleInvertScrollZoom(_:)),
+                                            keyEquivalent: "")
+        invertToggle.target = self
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
 

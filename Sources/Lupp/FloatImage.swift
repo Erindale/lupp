@@ -34,6 +34,15 @@ final class FloatImage {
 
     var isHDR: Bool { maxComponent > 1.0001 }
 
+    /// Scene-referred rather than display-referred: the values describe light,
+    /// not pixels already prepared for a screen. Decided from the file's own
+    /// declared colour space and format, which is the part a file *does* record.
+    var isSceneLinear: Bool {
+        sourceColorSpace.localizedCaseInsensitiveContains("linear")
+            || typeIdentifier == "com.ilm.openexr-image"
+            || typeIdentifier == "public.radiance"
+    }
+
     init(width: Int, height: Int, pixels: UnsafeMutablePointer<Float>,
          url: URL, typeIdentifier: String, sourceBitDepth: Int, sourceColorSpace: String,
          fullWidth: Int, fullHeight: Int, wasDownsampled: Bool, maxComponent: Float) {

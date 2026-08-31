@@ -5,7 +5,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private let canvas = ImageCanvasView()
     private let readout = ReadoutBar()
     private let scopes = ScopesPanel()
-    private var scopesWidth: NSLayoutConstraint!
+    /// Distance the panel is pushed past the window's right edge. Animating this
+    /// rather than the panel's width makes it *slide* out at full size; animating
+    /// the width squashes it toward the corner instead.
+    private var scopesOffset: NSLayoutConstraint!
     private let scopesButton = NSButton()
 
     private var siblings: [URL] = []
@@ -42,6 +45,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         buildContentView()
         buildTitlebarAccessory()
         canvas.canvasDelegate = self
+        wireScopesPanel()
 
         // Restores the last size and position. Only the very first window ever
         // opened sizes itself to the image; after that the window you chose wins
@@ -65,7 +69,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
-        scopesWidth = scopes.widthAnchor.constraint(equalToConstant: 0)
+        // Clip, so the panel is genuinely out of sight once it has slid past.
+        content.clipsToBounds = true
+        scopesOffset = scopes.trailingAnchor.constraint(equalTo: content.trailingAnchor,
+                                                        constant: Theme.panelWidth)
 
         NSLayoutConstraint.activate([
             canvas.topAnchor.constraint(equalTo: content.topAnchor),
@@ -74,9 +81,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             canvas.bottomAnchor.constraint(equalTo: readout.topAnchor),
 
             scopes.topAnchor.constraint(equalTo: content.topAnchor),
-            scopes.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             scopes.bottomAnchor.constraint(equalTo: readout.topAnchor),
-            scopesWidth,
+            scopes.widthAnchor.constraint(equalToConstant: Theme.panelWidth),
+            scopesOffset,
 
             readout.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             readout.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -114,6 +121,32 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         window?.addTitlebarAccessoryViewController(acc)
     }
 
+    private func wireScopesPanel() {
+        scopes.onChannel = { [weak self] ch in
+            self?.canvas.display.channel = ch
+        }
+        scopes.onClipping = { [weak self] on in
+            self?.canvas.display.showClipping = on
+        }
+        scopes.onFalseColour = { [weak self] on in
+            self?.canvas.display.falseColour = on
+        }
+        scopes.onViewTransform = { [weak self] t in
+            guard let self else { return }
+            Preferences.setViewTransform(t, sceneLinear: self.currentIsSceneLinear)
+            self.canvas.display.viewTransform = t
+            self.syncPanelControls()
+        }
+    }
+
+    private var currentIsSceneLinear: Bool { canvas.image?.isSceneLinear ?? false }
+
+    private func syncPanelControls() {
+        scopes.show(display: canvas.display,
+                    detected: canvas.image.map(ViewTransform.detected(for:)),
+                    sceneLinear: currentIsSceneLinear)
+    }
+
     // MARK: - Scopes
 
     @objc func toggleScopes(_ sender: Any?) {
@@ -122,19 +155,20 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     private func applyScopesVisibility(animated: Bool) {
-        let target: CGFloat = scopesOpen ? Theme.panelWidth : 0
+        let target: CGFloat = scopesOpen ? 0 : Theme.panelWidth
         // Grey when closed, white when open — the accent colour read as an alert
         // rather than as a state, which is not what a view toggle should say.
         scopesButton.contentTintColor = scopesOpen ? .labelColor : .secondaryLabelColor
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.16
+                ctx.duration = 0.18
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 ctx.allowsImplicitAnimation = true
-                scopesWidth.animator().constant = target
+                scopesOffset.animator().constant = target
                 window?.contentView?.layoutSubtreeIfNeeded()
             }
         } else {
-            scopesWidth.constant = target
+            scopesOffset.constant = target
         }
         if scopesOpen { recomputeScopes() }
     }
@@ -197,6 +231,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             sizeWindow(to: img)
         }
         canvas.show(img)
+        // Colour space comes from the file; the view transform is chosen from what
+        // kind of file it is, because no file records one.
+        canvas.display.viewTransform = Preferences.viewTransform(sceneLinear: img.isSceneLinear)
+        syncPanelControls()
         recomputeScopes()
 
         var subtitle = "\(img.fullWidth) × \(img.fullHeight)"

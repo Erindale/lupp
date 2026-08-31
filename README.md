@@ -28,25 +28,58 @@ about what's in the file — including the parts above diffuse white.
   `frame_2` comes before `frame_10`.
 - Nearest-neighbour sampling above 200%, so at high zoom you see the pixels in
   the file rather than the viewer's interpolation.
-- **Scopes panel** (⌥⌘I, or the button in the title bar) — histogram, RGB parade,
-  vectorscope with a BT.709 graticule, plus per-channel min/max/mean and clipping
-  percentages.
+- **Scopes panel** (⌥⌘I, or the button in the title bar) — histogram, luma
+  waveform, RGB parade (split or Resolve-style combined), vectorscope with a
+  BT.709 graticule and skin-tone line, and a CIE 1931 xy plot with the spectral
+  locus and Rec.709 / P3 / Rec.2020 gamut triangles. Plus per-channel min/max/mean
+  and clipping percentages.
+- **Display controls** in the same panel — isolate R/G/B/A/Luma, a clipping
+  overlay, and an ARRI-style false-colour exposure ramp.
+- **View transforms** — Standard, AgX, ACES Filmic and Raw, defaulted from what
+  the file is and overridable.
 
 The window is one continuous surface: the title bar, the canvas and the readout
 footer all share a single background colour, defined once and converted to linear
 for the Metal drawable so they can't drift apart.
 
-## Two colour spaces, both labelled
+## Colour spaces, all labelled
 
-The eyedropper reports **linear** values — that's the file's own light-linear
-data, where an EXR highlight reads 8.0.
+The eyedropper reports **linear** values — the file's own light-linear data,
+where an EXR highlight reads 8.0.
 
-The scopes bin **sRGB-encoded** values, because that's what every grading tool
-shows and a linear histogram crushes almost everything into the bottom eighth of
-the graph. A 50% grey field peaks mid-histogram, not at 21%.
+The histogram, waveform, parade and vectorscope bin **sRGB-encoded** values,
+because that's what every grading tool shows and a linear histogram crushes
+almost everything into the bottom eighth of the graph. A 50% grey field peaks
+mid-histogram, not at 21%.
 
-Both are correct answers to different questions, which is exactly why each says
-which one it is rather than leaving you to guess.
+The CIE scope uses **linear** tristimulus values, because chromaticity is a
+property of the light; running it on encoded values would put every point in the
+wrong place.
+
+Three different answers to three different questions, which is exactly why each
+one says which it is rather than leaving you to guess.
+
+## View transforms
+
+A file records its **colour space**, and Lupp reads and applies that
+automatically. A file does not record a **view transform** — Blender doesn't
+write "I was rendered through AgX" into an EXR — so Lupp picks a default from
+what kind of file it is and lets you override it:
+
+- **Scene-linear** sources (EXR, Radiance, any linear profile) default to **AgX**,
+  approximating Blender 4.x's default so renders look like they do in the
+  viewport rather than blown out.
+- **Display-referred** sources (a JPEG, a PNG) default to **Standard** — already
+  graded, so no tone map is applied and nothing is mapped twice.
+
+Also available: **ACES Filmic** (the Hill/Narkowicz RRT+ODT fit, not the
+reference LUTs) and **Raw** (Blender's — no encode at all, for inspecting normal
+or depth data). The override sticks per class of file, so choosing ACES for one
+EXR applies to the next one without leaking onto a JPEG. The panel always says
+what was detected and whether you're overriding it.
+
+AgX and ACES here are **analytic approximations**, close to but not identical
+with the reference transforms.
 
 ## How zoom behaves
 
@@ -72,8 +105,9 @@ first window you ever open sizes itself to the image.
 | Scroll wheel | Zoom, anchored at the cursor |
 | Two-finger scroll / pinch | Pan / zoom (trackpad) |
 | ⌥ + scroll | Invert zoom-vs-pan for one gesture |
-| Middle-mouse drag | Pan |
-| Space + drag | Pan (trackpad fallback) |
+| Left-drag | Pan |
+| Middle-mouse drag | Pan (where macOS lets it through) |
+| Space + drag | Pan |
 | ← → | Previous / next image in the folder |
 | ⌘0 / ⌘1 | Zoom to fit / 1 image pixel per screen pixel |
 | `E` / `⇧E` / `R` | Exposure up / down / reset |

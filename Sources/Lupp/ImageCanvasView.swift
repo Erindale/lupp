@@ -15,10 +15,21 @@ final class ImageCanvasView: MTKView {
     private(set) var image: FloatImage?
     private var viewport = Viewport()
 
-    /// EV offset applied at display time only. The readout always reports the
-    /// file's own values, never the exposed ones — otherwise the numbers would
-    /// describe a viewing decision rather than the image.
-    var exposureEV: Float = 0 { didSet { needsDisplay = true } }
+    /// Everything that changes how the image is shown but not what it contains.
+    /// The readout always reports the file's own values, never the displayed
+    /// ones — otherwise the numbers would describe a viewing decision rather
+    /// than the image.
+    var display = Renderer.DisplayState() {
+        didSet {
+            needsDisplay = true
+            canvasDelegate?.canvasReadoutChanged(self)
+        }
+    }
+
+    var exposureEV: Float {
+        get { display.exposureEV }
+        set { display.exposureEV = newValue }
+    }
 
     private(set) var cursorPixel: (x: Int, y: Int)?
     private(set) var cursorValue: SIMD4<Float>?
@@ -175,8 +186,9 @@ final class ImageCanvasView: MTKView {
             // direction. Panning should follow that preference — it is scrolling.
             // Zooming should not: wheel-forward means zoom in everywhere else.
             if e.isDirectionInvertedFromDevice { unit = -unit }
+            if Preferences.invertScrollZoom { unit = -unit }
             guard unit != 0 else { return }
-            zoomStep(pow(1.12, max(-3, min(3, -unit))),
+            zoomStep(pow(1.12, max(-3, min(3, unit))),
                      anchor: convert(e.locationInWindow, from: nil))
         } else {
             guard e.scrollingDeltaX != 0 || e.scrollingDeltaY != 0 else { return }
@@ -206,8 +218,11 @@ final class ImageCanvasView: MTKView {
 
     override func otherMouseUp(with e: NSEvent) { endPan() }
 
+    // Left-drag pans. Middle-click still works where the OS lets it through, but
+    // it can't be the primary gesture: macOS Mouse settings routinely bind
+    // button 3 to Mission Control, and trackpads have no middle button at all.
     override func mouseDown(with e: NSEvent) {
-        if spaceHeld { beginPan() }
+        beginPan()
     }
 
     override func mouseDragged(with e: NSEvent) {
@@ -305,8 +320,7 @@ final class ImageCanvasView: MTKView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        renderer?.draw(in: self, viewport: viewport,
-                       exposure: pow(2, exposureEV),
+        renderer?.draw(in: self, viewport: viewport, display: display,
                        backingScale: window?.backingScaleFactor ?? 1)
     }
 }

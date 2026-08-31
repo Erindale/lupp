@@ -22,6 +22,31 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: "scopesPanelOpen") }
     }
 
+    /// The view transform is re-detected per image, but an override sticks — kept
+    /// per *class* of file so choosing ACES for one EXR still applies to the next
+    /// one, without leaking that choice onto a JPEG that needs no tone map.
+    static func viewTransform(sceneLinear: Bool) -> ViewTransform {
+        let key = sceneLinear ? "viewTransformSceneLinear" : "viewTransformDisplayReferred"
+        guard let raw = UserDefaults.standard.object(forKey: key) as? Int,
+              let t = ViewTransform(rawValue: raw) else {
+            return sceneLinear ? .agx : .standard
+        }
+        return t
+    }
+
+    static func setViewTransform(_ t: ViewTransform, sceneLinear: Bool) {
+        let key = sceneLinear ? "viewTransformSceneLinear" : "viewTransformDisplayReferred"
+        UserDefaults.standard.set(t.rawValue, forKey: key)
+    }
+
+    /// Flips scroll-zoom direction. Present because no amount of reasoning about
+    /// `isDirectionInvertedFromDevice` settles what a given mouse and driver
+    /// combination will actually send — this makes it one click to correct.
+    static var invertScrollZoom: Bool {
+        get { UserDefaults.standard.bool(forKey: "invertScrollZoom") }
+        set { UserDefaults.standard.set(newValue, forKey: "invertScrollZoom") }
+    }
+
     /// Parade drawn as one superimposed plot (Resolve's combined view) rather
     /// than three side-by-side panels.
     static var paradeCombined: Bool {

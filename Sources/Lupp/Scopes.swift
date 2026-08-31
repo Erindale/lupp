@@ -20,6 +20,12 @@ struct Scopes {
     /// Both are rasterised in the same pass — the second accumulation is cheap
     /// next to the walk over the pixels, and switching should be instant.
     let paradeCombined: CGImage
+    /// Luma-only waveform, the scope Resolve leads with.
+    let waveform: CGImage
+    /// CIE 1931 xy scatter. Unlike the other scopes this is computed on *linear*
+    /// tristimulus values — chromaticity is a property of the light, and running
+    /// it on display-encoded values would put the points in the wrong place.
+    let cie: CGImage
     let vectorscope: CGImage
     let stats: Stats
 
@@ -52,6 +58,8 @@ struct Scopes {
 
         let vs = 256
         var vector = [Float](repeating: 0, count: vs * vs)
+        var wave = [Float](repeating: 0, count: cw * ph)
+        var cieAcc = [Float](repeating: 0, count: CIE.size * CIE.size)
 
         var stats = Stats()
         var sum = SIMD3<Double>(repeating: 0)
@@ -91,6 +99,24 @@ struct Scopes {
                 combined[(c * ph + row) * cw + cx] += 1
             }
 
+            // Luma waveform, full width.
+            let lumaE = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z
+            let lrow = min(ph - 1, max(0, Int((1 - lumaE) * Float(ph - 1))))
+            wave[lrow * cw + cx] += 1
+
+            // CIE xy, from the linear values.
+            let X = 0.4124564 * lin.x + 0.3575761 * lin.y + 0.1804375 * lin.z
+            let Y = 0.2126729 * lin.x + 0.7151522 * lin.y + 0.0721750 * lin.z
+            let Z = 0.0193339 * lin.x + 0.1191920 * lin.y + 0.9503041 * lin.z
+            let sumXYZ = X + Y + Z
+            if sumXYZ > 1e-6 {
+                let cxx = Int(X / sumXYZ / Float(CIE.xMax) * Float(CIE.size - 1))
+                let cyy = Int((1 - Y / sumXYZ / Float(CIE.yMax)) * Float(CIE.size - 1))
+                if cxx >= 0, cxx < CIE.size, cyy >= 0, cyy < CIE.size {
+                    cieAcc[cyy * CIE.size + cxx] += 1
+                }
+            }
+
             // Vectorscope: BT.709 chroma of the display-encoded value.
             let y = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z
             let cb = (e.z - y) / 1.8556
@@ -110,9 +136,11 @@ struct Scopes {
         guard let h = renderHistogram(hist, bins: bins),
               let pa = renderParade(parade, width: pw, height: ph),
               let co = renderCombinedParade(combined, width: cw, height: ph),
+              let wf = renderWaveform(wave, width: cw, height: ph),
+              let ci = renderCIE(cieAcc, size: CIE.size),
               let v = renderVectorscope(vector, size: vs) else { return nil }
         return Scopes(histogram: h, paradeSplit: pa, paradeCombined: co,
-                      vectorscope: v, stats: stats)
+                      waveform: wf, cie: ci, vectorscope: v, stats: stats)
     }
 
     // MARK: - Rasterisers
@@ -194,6 +222,45 @@ struct Scopes {
             }
         }
         return makeImage(&px, w, h)
+    }
+
+    private static func renderWaveform(_ acc: [Float], width w: Int, height h: Int) -> CGImage? {
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        var peak: Float = 1
+        for v in acc { peak = Swift.max(peak, v) }
+        let denom = log(1 + peak)
+
+        for y in 0..<h {
+            for x in 0..<w {
+                let n = acc[y * w + x]
+                if n <= 0 { continue }
+                let t = Swift.min(1, log(1 + n) / denom * 1.7)
+                let o = (y * w + x) * 4
+                let g = UInt8(t * 235)
+                px[o] = UInt8(t * 200); px[o + 1] = g; px[o + 2] = UInt8(t * 210)
+                px[o + 3] = 255
+            }
+        }
+        return makeImage(&px, w, h)
+    }
+
+    private static func renderCIE(_ acc: [Float], size: Int) -> CGImage? {
+        var px = [UInt8](repeating: 0, count: size * size * 4)
+        var peak: Float = 1
+        for v in acc { peak = Swift.max(peak, v) }
+        let denom = log(1 + peak)
+
+        for y in 0..<size {
+            for x in 0..<size {
+                let n = acc[y * size + x]
+                if n <= 0 { continue }
+                let t = Swift.min(1, log(1 + n) / denom * 2.0)
+                let o = (y * size + x) * 4
+                px[o] = UInt8(t * 245); px[o + 1] = UInt8(t * 245); px[o + 2] = UInt8(t * 245)
+                px[o + 3] = 255
+            }
+        }
+        return makeImage(&px, size, size)
     }
 
     private static func renderVectorscope(_ acc: [Float], size: Int) -> CGImage? {
