@@ -58,14 +58,53 @@ enum CIE {
             + 0.681 * lobe(w, 459.0, 0.0385, 0.0725)
         }
 
+        // Start at 400nm, not 380. Below that every colour matching function is
+        // near zero, so X/(X+Y+Z) is a ratio of noise and the points scatter —
+        // which showed up as a tangle at the foot of the diagram and a closing
+        // chord running to a garbage endpoint. The locus barely moves between
+        // 380 and 400nm, so nothing visible is lost.
         var pts: [CGPoint] = []
-        var w = 380.0
+        var w = 400.0
         while w <= 700.0 {
             let X = xBar(w), Y = yBar(w), Z = zBar(w)
             let s = X + Y + Z
-            if s > 1e-9 { pts.append(CGPoint(x: X / s, y: Y / s)) }
-            w += 2
+            guard s > 1e-4 else { w += 1; continue }
+            let p = CGPoint(x: X / s, y: Y / s)
+            // The analytic fit has a small negative lobe; discard anything it
+            // pushes outside the region a chromaticity can occupy.
+            if p.x >= 0, p.y >= 0, p.x <= axisMax, p.y <= axisMax { pts.append(p) }
+            w += 1
         }
-        return pts
+
+        // The spectral locus plus the line of purples is precisely the convex
+        // hull of the spectral points, so taking the hull both closes the shape
+        // correctly and drops any stray point the fit produced.
+        return convexHull(pts)
     }()
+
+    /// Andrew's monotone chain.
+    private static func convexHull(_ input: [CGPoint]) -> [CGPoint] {
+        guard input.count > 2 else { return input }
+        let pts = input.sorted { $0.x == $1.x ? $0.y < $1.y : $0.x < $1.x }
+        func cross(_ o: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+            (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        }
+        var lower: [CGPoint] = []
+        for p in pts {
+            while lower.count >= 2, cross(lower[lower.count - 2], lower[lower.count - 1], p) <= 0 {
+                lower.removeLast()
+            }
+            lower.append(p)
+        }
+        var upper: [CGPoint] = []
+        for p in pts.reversed() {
+            while upper.count >= 2, cross(upper[upper.count - 2], upper[upper.count - 1], p) <= 0 {
+                upper.removeLast()
+            }
+            upper.append(p)
+        }
+        lower.removeLast()
+        upper.removeLast()
+        return lower + upper
+    }
 }

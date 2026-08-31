@@ -1,67 +1,49 @@
 import AppKit
 import simd
 
-/// Right-hand panel: display controls at the top, scopes in the middle, what the
-/// file is and how it's being shown at the bottom.
-final class ScopesPanel: NSView {
+/// The inspector: what the image *is*. Nothing here changes a pixel.
+final class ScopesPanel: SidePanel {
     var onChannel: ((ChannelView) -> Void)?
     var onClipping: ((Bool) -> Void)?
     var onFalseColour: ((Bool) -> Void)?
     var onViewTransform: ((ViewTransform) -> Void)?
-    var onLoadLUT: (() -> Void)?
-    var onClearLUT: (() -> Void)?
-    var onLUTAmount: ((Float) -> Void)?
 
     private let channelControl = NSSegmentedControl(
         labels: ChannelView.allCases.map(\.label),
         trackingMode: .selectOne, target: nil, action: nil)
-    /// Same segmented treatment as the channel row, but `.selectAny` so the two
-    /// overlays are independent toggles rather than a choice of one.
+    /// `.selectAny` so the two overlays are independent toggles rather than a
+    /// choice of one.
     private let overlayControl = NSSegmentedControl(
         labels: ["Clipping", "False colour"],
         trackingMode: .selectAny, target: nil, action: nil)
 
     private let histogram = ScopeView(title: "Histogram", heightRatio: 0.42)
-    private let cie = CIEView(title: "CIE 1931 xy", heightRatio: 1)
     private let paradeMode = NSSegmentedControl(labels: ["Parade", "Combined", "Luma"],
                                                 trackingMode: .selectOne, target: nil, action: nil)
     private lazy var parade = ScopeView(title: "Waveform", heightRatio: 0.42,
                                         accessory: paradeMode)
     private let vectorscope = VectorscopeView(title: "Vectorscope", heightRatio: 1)
+    private let cie = CIEView(title: "CIE 1931 xy", heightRatio: 1)
     private let stats = NSTextField(labelWithString: "")
 
-    private let lutButtons = NSSegmentedControl(labels: ["Load LUT…", "Clear"],
-                                                trackingMode: .momentary, target: nil, action: nil)
-    private let lutLabel = NSTextField(labelWithString: "No LUT")
-    private let lutSlider = NSSlider(value: 100, minValue: 0, maxValue: 100,
-                                     target: nil, action: nil)
-
     private let transformPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let transformNote = NSTextField(labelWithString: "")
-    private let note = NSTextField(labelWithString: "Scopes read sRGB-encoded values.")
+    private lazy var transformNote = caption()
+    private lazy var note = caption("Scopes read sRGB-encoded values; the CIE plot uses linear.")
 
-    /// Held so switching parade mode is instant — both rasters already exist.
+    /// Held so switching waveform mode is instant — all three rasters exist.
     private var current: Scopes?
 
-    /// True while a control's own action is running.
-    ///
-    /// The action mutates the canvas's display state, which reports back and asks
-    /// this panel to re-sync its controls — landing inside AppKit's still-running
-    /// click handling and stomping the change the click just made. That made the
-    /// overlay toggles impossible to switch off: the deselect was undone before
-    /// the mouse came up.
-    private var handlingControlAction = false
+    override init() {
+        super.init()
 
-    private func emit(_ body: () -> Void) {
-        handlingControlAction = true
-        body()
-        handlingControlAction = false
-    }
+        style(channelControl)
+        channelControl.selectedSegment = 0
+        channelControl.target = self
+        channelControl.action = #selector(channelChanged(_:))
 
-    init() {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        style(overlayControl)
+        overlayControl.target = self
+        overlayControl.action = #selector(overlayChanged(_:))
 
         paradeMode.segmentStyle = .rounded
         paradeMode.controlSize = .mini
@@ -69,155 +51,33 @@ final class ScopesPanel: NSView {
         paradeMode.selectedSegment = min(2, max(0, Preferences.paradeMode))
         paradeMode.target = self
         paradeMode.action = #selector(paradeModeChanged(_:))
-        // Neutral rather than the system accent: in a scopes panel a saturated
-        // highlight reads as a colour cue about the image, not about the control.
         paradeMode.selectedSegmentBezelColor = NSColor(white: 0.42, alpha: 1)
 
-        let channelRow = buildChannelRow()
-        overlayControl.segmentDistribution = .fillEqually
-        overlayControl.segmentStyle = .rounded
-        overlayControl.controlSize = .regular
-        overlayControl.font = .systemFont(ofSize: 11)
-        overlayControl.target = self
-        overlayControl.action = #selector(overlayChanged(_:))
-        overlayControl.selectedSegmentBezelColor = NSColor(white: 0.44, alpha: 1)
-        overlayControl.translatesAutoresizingMaskIntoConstraints = false
-
-        buildTransformControls()
-        buildLUTControls()
-
-        stats.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        stats.textColor = .secondaryLabelColor
-        stats.lineBreakMode = .byWordWrapping
-        stats.maximumNumberOfLines = 0
-        for f in [note, transformNote] {
-            f.font = .systemFont(ofSize: 9)
-            f.textColor = .tertiaryLabelColor
-            f.lineBreakMode = .byWordWrapping
-            f.maximumNumberOfLines = 0
-        }
-
-        let stack = NSStackView(views: [
-            channelRow, overlayControl,
-            histogram, parade, vectorscope, cie,
-            stats,
-            separator(), transformPopup, transformNote,
-            lutButtons, lutLabel, lutSlider, note,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.setCustomSpacing(6, after: channelRow)
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 14, right: 14)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let scroll = NSScrollView()
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
-        scroll.verticalScroller = OverlayScroller()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        // Flipped: an NSScrollView's document view is bottom-origin by default,
-        // which pins short content to the bottom of the panel instead of the top.
-        let doc = FlippedView()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(stack)
-        scroll.documentView = doc
-        addSubview(scroll)
-
-        var c: [NSLayoutConstraint] = [
-            scroll.topAnchor.constraint(equalTo: topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            doc.widthAnchor.constraint(equalTo: scroll.widthAnchor),
-            stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
-        ]
-        for v in [channelControl, overlayControl, histogram, parade, vectorscope, cie, stats,
-                  transformPopup, transformNote, lutButtons, lutLabel, lutSlider,
-                  note] as [NSView] {
-            c.append(v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28))
-        }
-        NSLayoutConstraint.activate(c)
-
-        syncControls()
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    // MARK: - Controls
-
-    /// One segmented row of equal-width cells, as Blender's image editor does it.
-    /// Radio buttons were the literal request but read as a form control and, on
-    /// macOS, paint their dot in the system accent — which is the coloured
-    /// distraction this panel is meant not to have.
-    private func buildChannelRow() -> NSView {
-        channelControl.segmentDistribution = .fillEqually
-        channelControl.segmentStyle = .rounded
-        channelControl.controlSize = .regular
-        channelControl.font = .systemFont(ofSize: 11)
-        channelControl.selectedSegment = 0
-        channelControl.target = self
-        channelControl.action = #selector(channelChanged(_:))
-        channelControl.selectedSegmentBezelColor = NSColor(white: 0.44, alpha: 1)
-        channelControl.translatesAutoresizingMaskIntoConstraints = false
-        return channelControl
-    }
-
-    /// A creative LUT sits on top of the view transform, so it lives directly
-    /// under it — the panel reads top to bottom as the order the pixels travel.
-    private func buildLUTControls() {
-        lutButtons.segmentDistribution = .fillEqually
-        lutButtons.segmentStyle = .rounded
-        lutButtons.controlSize = .small
-        lutButtons.font = .systemFont(ofSize: 10)
-        lutButtons.target = self
-        lutButtons.action = #selector(lutButtonPressed(_:))
-        lutButtons.translatesAutoresizingMaskIntoConstraints = false
-
-        lutLabel.font = .systemFont(ofSize: 9)
-        lutLabel.textColor = .tertiaryLabelColor
-        lutLabel.lineBreakMode = .byTruncatingMiddle
-
-        lutSlider.controlSize = .small
-        // Neutral fill, like every other control here — the accent colour in a
-        // scopes panel reads as information about the image.
-        lutSlider.trackFillColor = NSColor(white: 0.52, alpha: 1)
-        lutSlider.target = self
-        lutSlider.action = #selector(lutAmountChanged(_:))
-        lutSlider.isEnabled = false
-    }
-
-    @objc private func lutButtonPressed(_ sender: NSSegmentedControl) {
-        emit { sender.selectedSegment == 0 ? onLoadLUT?() : onClearLUT?() }
-    }
-
-    @objc private func lutAmountChanged(_ sender: NSSlider) {
-        emit { onLUTAmount?(Float(sender.doubleValue / 100)) }
-    }
-
-    private func buildTransformControls() {
-        transformPopup.controlSize = .small
-        transformPopup.font = .systemFont(ofSize: 11)
+        style(transformPopup)
         transformPopup.target = self
         transformPopup.action = #selector(transformChanged(_:))
         for t in ViewTransform.allCases {
             transformPopup.addItem(withTitle: t.label)
             transformPopup.lastItem?.tag = t.rawValue
         }
+
+        stats.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        stats.textColor = .secondaryLabelColor
+        stats.lineBreakMode = .byWordWrapping
+        stats.maximumNumberOfLines = 0
+
+        install(column: [channelControl, overlayControl,
+                         histogram, parade, vectorscope, cie,
+                         stats,
+                         separator(), sectionLabel("View transform"),
+                         transformPopup, transformNote, note],
+                fullWidth: [channelControl, overlayControl, histogram, parade,
+                            vectorscope, cie, stats, transformPopup, transformNote, note])
     }
 
-    private func separator() -> NSView {
-        let v = NSBox()
-        v.boxType = .separator
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
-    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    // MARK: - Actions
 
     @objc private func channelChanged(_ sender: NSSegmentedControl) {
         guard let ch = ChannelView(rawValue: sender.selectedSegment) else { return }
@@ -241,9 +101,7 @@ final class ScopesPanel: NSView {
         applyParadeMode()
     }
 
-    private func syncControls() {
-        channelControl.selectedSegment = 0
-    }
+    // MARK: - Sync
 
     /// Reflect the state the canvas is actually in, so the panel can't drift out
     /// of sync with what's on screen after an image loads and re-detects.
@@ -255,15 +113,6 @@ final class ScopesPanel: NSView {
             overlayControl.setSelected(display.showClipping, forSegment: 0)
             overlayControl.setSelected(display.falseColour, forSegment: 1)
             transformPopup.selectItem(withTag: display.viewTransform.rawValue)
-        }
-
-        if let name = display.lutName {
-            lutLabel.stringValue = name
-            lutSlider.isEnabled = true
-            if !handlingControlAction { lutSlider.doubleValue = Double(display.lutAmount) * 100 }
-        } else {
-            lutLabel.stringValue = "No LUT"
-            lutSlider.isEnabled = false
         }
 
         if let detected {
@@ -278,22 +127,20 @@ final class ScopesPanel: NSView {
         }
     }
 
-    // MARK: - Scopes
-
     func update(with s: Scopes?, image: FloatImage?) {
         current = s
         histogram.content = s?.histogram
-        cie.content = s?.cie
         vectorscope.content = s?.vectorscope
+        cie.content = s?.cie
         applyParadeMode()
         stats.stringValue = s.map { text(for: $0, image: image) } ?? "No image."
     }
 
     private func applyParadeMode() {
         switch Preferences.paradeMode {
-        case 1:  parade.content = current?.paradeCombined; parade.title = "Waveform · combined"
-        case 2:  parade.content = current?.waveform;       parade.title = "Waveform · luma"
-        default: parade.content = current?.paradeSplit;    parade.title = "Waveform · RGB parade"
+        case 1:  parade.content = current?.paradeCombined
+        case 2:  parade.content = current?.waveform
+        default: parade.content = current?.paradeSplit
         }
     }
 
@@ -326,20 +173,16 @@ final class ScopesPanel: NSView {
     }
 }
 
-private final class FlippedView: NSView {
-    override var isFlipped: Bool { true }
-}
-
 // MARK: - Scope views
 
-private class ScopeView: NSView {
+class ScopeView: NSView {
     private let label: NSTextField
+    private let heightRatio: CGFloat
+    var content: CGImage? { didSet { needsDisplay = true } }
 
     var title: String = "" {
         didSet { label.stringValue = title.uppercased() }
     }
-    private let heightRatio: CGFloat
-    var content: CGImage? { didSet { needsDisplay = true } }
 
     init(title: String, heightRatio: CGFloat, accessory: NSView? = nil) {
         self.heightRatio = heightRatio
@@ -398,7 +241,7 @@ private class ScopeView: NSView {
 
 /// Vectorscope with a graticule derived from the same BT.709 maths as the trace,
 /// so the targets can't drift out of agreement with what's plotted.
-private final class VectorscopeView: ScopeView {
+final class VectorscopeView: ScopeView {
     private static let targets: [(String, SIMD3<Float>)] = [
         ("R",  [0.75, 0, 0]),    ("Yl", [0.75, 0.75, 0]),
         ("G",  [0, 0.75, 0]),    ("Cy", [0, 0.75, 0.75]),
@@ -463,14 +306,14 @@ private final class VectorscopeView: ScopeView {
 
 /// CIE 1931 xy scope: where the image's colours actually sit, against the
 /// spectral locus and the gamuts they might be claiming to use.
-private final class CIEView: ScopeView {
+final class CIEView: ScopeView {
     private func point(_ p: CGPoint, in r: NSRect) -> NSPoint {
         NSPoint(x: r.minX + p.x / CIE.xMax * r.width,
                 y: r.minY + p.y / CIE.yMax * r.height)
     }
 
     override func drawOverlay(in r: NSRect, ctx: CGContext) {
-        // Spectral locus, closed by the line of purples.
+        // Already a closed hull — locus plus the line of purples.
         let locus = NSBezierPath()
         for (i, p) in CIE.spectralLocus.enumerated() {
             let v = point(p, in: r)

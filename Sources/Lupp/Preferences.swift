@@ -16,10 +16,15 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: scrollZoomKey) }
     }
 
-    /// Remembered so the panel stays where you left it between launches.
+    /// Remembered so the panels stay where you left them between launches.
     static var scopesPanelOpen: Bool {
         get { UserDefaults.standard.bool(forKey: "scopesPanelOpen") }
         set { UserDefaults.standard.set(newValue, forKey: "scopesPanelOpen") }
+    }
+
+    static var gradePanelOpen: Bool {
+        get { UserDefaults.standard.bool(forKey: "gradePanelOpen") }
+        set { UserDefaults.standard.set(newValue, forKey: "gradePanelOpen") }
     }
 
     /// The view transform is re-detected per image, but an override sticks — kept

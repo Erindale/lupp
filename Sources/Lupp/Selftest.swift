@@ -26,6 +26,7 @@ enum Selftest {
         openingZoomRules(in: dir)
         scopesReadDisplayEncoded(in: dir)
         cubeLUTParses(in: dir)
+        gpuPathIsExact(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -264,6 +265,80 @@ enum Selftest {
         }
         check("1D LUT expands to a cube", lut1.wasOneDimensional && lut1.size == 4,
               detail: "1D=\(lut1.wasOneDimensional) size=\(lut1.size)")
+    }
+
+    /// Runs a known image through the real GPU shader via the export path.
+    ///
+    /// Everything else here tests the CPU side. This is the only check that the
+    /// pixels Metal actually produces are the right ones — and because export
+    /// shares the screen's shader, it covers both at once.
+    private static func gpuPathIsExact(in dir: URL) {
+        guard let renderer = Renderer(pixelFormat: .rgba16Float) else {
+            return fail("GPU", "no Metal device")
+        }
+        let url = dir.appendingPathComponent("gpu.png")
+        // Pure red, pure green, mid grey, white.
+        let bytes: [UInt8] = [255, 0, 0, 255,  0, 255, 0, 255,
+                              128, 128, 128, 255,  255, 255, 255, 255]
+        guard writeInteger(bytes, width: 4, height: 1, to: url, type: UTType.png.identifier),
+              let img = try? ImageLoader.load(url: url) else {
+            return fail("GPU", "could not build fixture")
+        }
+        renderer.upload(img)
+        let size = CGSize(width: img.width, height: img.height)
+
+        func pixels(_ d: Renderer.DisplayState) -> [[UInt8]]? {
+            guard let cg = renderer.exportImage(size: size, display: d, bitDepth: 8),
+                  let data = cg.dataProvider?.data as Data? else { return nil }
+            return (0..<4).map { i in Array(data[(i * 4)..<(i * 4 + 4)]) }
+        }
+
+        var plain = Renderer.DisplayState()
+        plain.viewTransform = .standard
+        guard let p = pixels(plain) else { return fail("GPU", "export failed") }
+
+        check("GPU round-trips sRGB unchanged",
+              p[0][0] > 250 && p[0][1] < 5 && p[2][0] >= 126 && p[2][0] <= 130 && p[3][0] > 250,
+              detail: "red=\(p[0]) grey=\(p[2]) white=\(p[3])")
+
+        // Identity corners must be a true no-op, or every grade starts skewed.
+        var identity = plain
+        identity.tetraEnabled = true
+        guard let q = pixels(identity) else { return fail("GPU tetra", "export failed") }
+        let same = zip(p, q).allSatisfy { a, b in
+            zip(a, b).allSatisfy { abs(Int($0) - Int($1)) <= 1 }
+        }
+        check("tetra with identity corners changes nothing", same,
+              detail: "before \(p[0]) after \(q[0])")
+
+        // Swap the red corner to green: red must become green, white must not move.
+        var swapped = identity
+        swapped.tetra.red = SIMD4<Float>(0, 1, 0, 0)
+        guard let r = pixels(swapped) else { return fail("GPU tetra", "export failed") }
+        check("moving the red corner moves red", r[0][1] > 200 && r[0][0] < 60,
+              detail: "red became \(r[0])")
+        check("tetra leaves white and grey alone",
+              abs(Int(r[3][0]) - Int(p[3][0])) <= 2 && abs(Int(r[2][0]) - Int(p[2][0])) <= 2,
+              detail: "white \(r[3]) grey \(r[2])")
+
+        // Export end to end: render, write a real file, read it back and compare.
+        // Covers the encode, the CGImage construction and the ImageIO write, none
+        // of which the in-memory check above touches.
+        let outURL = dir.appendingPathComponent("export.png")
+        guard let cg = renderer.exportImage(size: size, display: plain, bitDepth: 8),
+              let dest = CGImageDestinationCreateWithURL(outURL as CFURL,
+                                                         UTType.png.identifier as CFString, 1, nil)
+        else { return fail("export", "could not render") }
+        CGImageDestinationAddImage(dest, cg, nil)
+        guard CGImageDestinationFinalize(dest),
+              let back = try? ImageLoader.load(url: outURL) else {
+            return fail("export", "could not write or re-read")
+        }
+        check("exported file round-trips to the same pixels",
+              back.width == 4 && back.height == 1
+                  && near(back.sample(x: 0, y: 0)!.x, 1.0, tol: 0.01)
+                  && near(back.sample(x: 2, y: 0)!.x, 0.2159, tol: 0.01),
+              detail: "\(back.width)×\(back.height), red=\(back.sample(x: 0, y: 0)!.x)")
     }
 
     // MARK: - Helpers

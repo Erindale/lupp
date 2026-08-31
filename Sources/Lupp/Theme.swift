@@ -25,4 +25,36 @@ enum Theme {
     }
 
     static let panelWidth: CGFloat = 320
+
+    /// The grade panel's title-bar icon: an "o" — a ring filled with a radial
+    /// gradient, echoing the app icon rather than borrowing a system glyph.
+    static func gradeIcon(size s: CGFloat = 15) -> NSImage {
+        NSImage(size: NSSize(width: s, height: s), flipped: false) { _ in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            let c = CGPoint(x: s / 2, y: s / 2)
+            let outer = CGRect(x: 0.5, y: 0.5, width: s - 1, height: s - 1)
+            let t = s * 0.30                       // ring thickness
+            let inner = outer.insetBy(dx: t, dy: t)
+
+            let ring = CGMutablePath()
+            ring.addEllipse(in: outer)
+            ring.addEllipse(in: inner)
+            ctx.addPath(ring)
+            ctx.clip(using: .evenOdd)
+
+            let space = CGColorSpace(name: CGColorSpace.sRGB)!
+            let colours = [
+                CGColor(red: 0.42, green: 0.84, blue: 0.88, alpha: 1),
+                CGColor(red: 0.55, green: 0.35, blue: 0.90, alpha: 1),
+                CGColor(red: 1.00, green: 0.68, blue: 0.28, alpha: 1),
+            ] as CFArray
+            if let g = CGGradient(colorsSpace: space, colors: colours,
+                                  locations: [0, 0.55, 1]) {
+                ctx.drawRadialGradient(g, startCenter: c, startRadius: 0,
+                                       endCenter: c, endRadius: s / 2,
+                                       options: [.drawsAfterEndLocation])
+            }
+            return true
+        }
+    }
 }

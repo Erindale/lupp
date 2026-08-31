@@ -165,6 +165,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
         fileMenu.addItem(.separator())
+        let exportItem = fileMenu.addItem(withTitle: "Export as Displayed…",
+                                          action: #selector(ViewerWindowController.exportImage(_:)),
+                                          keyEquivalent: "e")
+        exportItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileItem.submenu = fileMenu
         main.addItem(fileItem)

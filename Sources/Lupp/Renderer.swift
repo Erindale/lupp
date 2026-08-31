@@ -46,9 +46,28 @@ final class Renderer {
         var showClipping: UInt32
         var falseColour: UInt32
         var lutEnabled: UInt32
-        var _pad0: UInt32 = 0
-        var _pad1: UInt32 = 0
-        var _pad2: UInt32 = 0
+        var tetraAmount: Float
+        var tetraEnabled: UInt32
+        /// Export applies the display encode in-shader; the on-screen drawable is
+        /// extended-linear and lets CoreAnimation do it instead.
+        var encodeOutput: UInt32
+    }
+
+    /// The six movable hue corners of the RGB cube. Black, white and the grey
+    /// axis are fixed by construction, which is what keeps neutrals neutral.
+    struct TetraCorners: Equatable {
+        var red = SIMD4<Float>(1, 0, 0, 0)
+        var yellow = SIMD4<Float>(1, 1, 0, 0)
+        var green = SIMD4<Float>(0, 1, 0, 0)
+        var cyan = SIMD4<Float>(0, 1, 1, 0)
+        var blue = SIMD4<Float>(0, 0, 1, 0)
+        var magenta = SIMD4<Float>(1, 0, 1, 0)
+
+        static let identity = TetraCorners()
+
+        var isIdentity: Bool {
+            self == TetraCorners.identity
+        }
     }
 
     struct DisplayState {
@@ -59,6 +78,9 @@ final class Renderer {
         var falseColour = false
         var lutAmount: Float = 1
         var lutName: String?
+        var tetra = TetraCorners()
+        var tetraAmount: Float = 1
+        var tetraEnabled = false
     }
 
     init?(pixelFormat: MTLPixelFormat) {
@@ -196,9 +218,17 @@ final class Renderer {
 
     // MARK: - Draw
 
-    func draw(in view: MTKView, viewport: Viewport, display: DisplayState, backingScale: CGFloat) {
+    func draw(in view: MTKView, viewport: Viewport, display: DisplayState,
+              dragHighlight: Bool = false, backingScale: CGFloat) {
         guard let drawable = view.currentDrawable,
-              let pass = view.currentRenderPassDescriptor,
+              let pass = view.currentRenderPassDescriptor else { return }
+        // A visible lift while a file is over the window, so a drop reads as
+        // landing somewhere rather than being swallowed.
+        if dragHighlight {
+            let b = Theme.backgroundLinear * 2.2
+            pass.colorAttachments[0].clearColor = MTLClearColor(red: b, green: b, blue: b, alpha: 1)
+        }
+        guard
               let cmd = queue.makeCommandBuffer(),
               let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
 
@@ -227,10 +257,15 @@ final class Renderer {
                              channel: UInt32(display.channel.rawValue),
                              showClipping: display.showClipping ? 1 : 0,
                              falseColour: display.falseColour ? 1 : 0,
-                             lutEnabled: lutTexture != nil ? 1 : 0)
+                             lutEnabled: lutTexture != nil ? 1 : 0,
+                             tetraAmount: display.tetraAmount,
+                             tetraEnabled: display.tetraEnabled ? 1 : 0,
+                             encodeOutput: 0)
             enc.setRenderPipelineState(pipeline)
+            var tetra = display.tetra
             enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
             enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+            enc.setFragmentBytes(&tetra, length: MemoryLayout<TetraCorners>.stride, index: 1)
             enc.setFragmentTexture(tex, index: 0)
             enc.setFragmentTexture(lutTexture ?? identityLUT, index: 1)
             if let lutSampler { enc.setFragmentSamplerState(lutSampler, index: 1) }
@@ -242,6 +277,109 @@ final class Renderer {
         enc.endEncoding()
         cmd.present(drawable)
         cmd.commit()
+    }
+
+    // MARK: - Export
+
+    /// Render the current image at full resolution through the same shader the
+    /// screen uses, so an export is exactly what was on screen rather than a
+    /// second implementation that can drift from it.
+    ///
+    /// Returns display-encoded sRGB with straight alpha — no checkerboard, since
+    /// transparency should survive into the file rather than be painted over.
+    func exportImage(size: CGSize, display: DisplayState, bitDepth: Int) -> CGImage? {
+        guard let source = texture else { return nil }
+        let w = Int(size.width), h = Int(size.height)
+        guard w > 0, h > 0 else { return nil }
+
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: w, height: h, mipmapped: false)
+        desc.usage = [.renderTarget, .shaderRead]
+        // Shared storage can be read back directly; discrete GPUs need managed
+        // memory plus an explicit synchronize before the CPU may look at it.
+        let unified = device.hasUnifiedMemory
+        desc.storageMode = unified ? .shared : .managed
+        guard let target = device.makeTexture(descriptor: desc) else { return nil }
+
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+
+        guard let cmd = queue.makeCommandBuffer(),
+              let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+
+        var u = Uniforms(rect: SIMD4<Float>(-1, -1, 1, 1),
+                         lutDomainMin: lutDomainMin,
+                         lutDomainMax: lutDomainMax,
+                         exposure: pow(2, display.exposureEV),
+                         checkerSize: 1,
+                         lutAmount: display.lutAmount,
+                         showChecker: 0,
+                         viewTransform: UInt32(display.viewTransform.rawValue),
+                         channel: UInt32(display.channel.rawValue),
+                         showClipping: display.showClipping ? 1 : 0,
+                         falseColour: display.falseColour ? 1 : 0,
+                         lutEnabled: lutTexture != nil ? 1 : 0,
+                         tetraAmount: display.tetraAmount,
+                         tetraEnabled: display.tetraEnabled ? 1 : 0,
+                         encodeOutput: 1)
+        var tetra = display.tetra
+        enc.setRenderPipelineState(pipeline)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+        enc.setFragmentBytes(&tetra, length: MemoryLayout<TetraCorners>.stride, index: 1)
+        enc.setFragmentTexture(source, index: 0)
+        enc.setFragmentTexture(lutTexture ?? identityLUT, index: 1)
+        enc.setFragmentSamplerState(nearest, index: 0)     // 1:1, nothing to filter
+        if let lutSampler { enc.setFragmentSamplerState(lutSampler, index: 1) }
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        enc.endEncoding()
+
+        if !unified, let blit = cmd.makeBlitCommandEncoder() {
+            blit.synchronize(resource: target)
+            blit.endEncoding()
+        }
+        cmd.commit()
+        cmd.waitUntilCompleted()
+
+        var half = [UInt16](repeating: 0, count: w * h * 4)
+        half.withUnsafeMutableBytes { raw in
+            target.getBytes(raw.baseAddress!, bytesPerRow: w * 8,
+                            from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        }
+        return Renderer.cgImage(fromHalf: half, width: w, height: h, bitDepth: bitDepth)
+    }
+
+    private static func cgImage(fromHalf half: [UInt16], width w: Int, height h: Int,
+                                bitDepth: Int) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let n = w * h * 4
+
+        func finish(_ data: Data, bpc: Int) -> CGImage? {
+            guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+            return CGImage(width: w, height: h, bitsPerComponent: bpc, bitsPerPixel: bpc * 4,
+                           bytesPerRow: w * 4 * (bpc / 8), space: space,
+                           bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                           provider: provider, decode: nil,
+                           shouldInterpolate: false, intent: .defaultIntent)
+        }
+
+        if bitDepth >= 16 {
+            var out = [UInt16](repeating: 0, count: n)
+            for i in 0..<n {
+                let v = Float(Float16(bitPattern: half[i]))
+                out[i] = UInt16(min(max(v, 0), 1) * 65535 + 0.5)
+            }
+            return out.withUnsafeBufferPointer { finish(Data(buffer: $0), bpc: 16) }
+        }
+        var out = [UInt8](repeating: 0, count: n)
+        for i in 0..<n {
+            let v = Float(Float16(bitPattern: half[i]))
+            out[i] = UInt8(min(max(v, 0), 1) * 255 + 0.5)
+        }
+        return out.withUnsafeBufferPointer { finish(Data(buffer: $0), bpc: 8) }
     }
 
     // MARK: - Shaders
@@ -269,10 +407,38 @@ final class Renderer {
         uint   showClipping;
         uint   falseColour;
         uint   lutEnabled;
-        uint   pad0;
-        uint   pad1;
-        uint   pad2;
+        float  tetraAmount;
+        uint   tetraEnabled;
+        uint   encodeOutput;
     };
+
+    struct TetraCorners {
+        float4 red, yellow, green, cyan, blue, magenta;
+    };
+
+    // Tetrahedral interpolation of the RGB cube, after hotgluebanjo's TetraInterp.
+    //
+    // The cube splits into six tetrahedra by the ordering of r, g and b. Each has
+    // black and white as two of its vertices, so those — and the whole grey axis
+    // between them — are fixed no matter where the six hue corners are moved.
+    // That is the property that makes it a colour warp rather than a tint: it
+    // cannot push a neutral off neutral.
+    //
+    // With the corners left at (1,0,0), (1,1,0) … it is exactly the identity.
+    float3 tetraInterp(float3 c, constant TetraCorners &t) {
+        float r = c.r, g = c.g, b = c.b;
+        const float3 W = float3(1.0);
+        // The (1 - max) * black term is omitted throughout: black is the origin.
+        if (r > g) {
+            if (g > b)      return (r - g) * t.red.rgb   + (g - b) * t.yellow.rgb  + b * W;
+            else if (r > b) return (r - b) * t.red.rgb   + (b - g) * t.magenta.rgb + g * W;
+            else            return (b - r) * t.blue.rgb  + (r - g) * t.magenta.rgb + g * W;
+        } else {
+            if (b > g)      return (b - g) * t.blue.rgb  + (g - r) * t.cyan.rgb    + r * W;
+            else if (b > r) return (g - b) * t.green.rgb + (b - r) * t.cyan.rgb    + r * W;
+            else            return (g - r) * t.green.rgb + (r - b) * t.yellow.rgb  + b * W;
+        }
+    }
 
     // The drawable is extended-LINEAR sRGB: CoreAnimation applies the display
     // encode itself. So every branch below must hand back linear values, and a
@@ -385,7 +551,8 @@ final class Renderer {
                                   texture3d<float> lut [[texture(1)]],
                                   sampler smp [[sampler(0)]],
                                   sampler lutSmp [[sampler(1)]],
-                                  constant Uniforms &u [[buffer(0)]]) {
+                                  constant Uniforms &u [[buffer(0)]],
+                                  constant TetraCorners &tetra [[buffer(1)]]) {
         float4 c = tex.sample(smp, in.uv);
         float3 rgb = c.rgb * u.exposure;
 
@@ -412,16 +579,24 @@ final class Renderer {
 
         rgb = applyView(rgb, u.viewTransform);
 
-        // A creative .cube LUT expects display-encoded input, so it goes on after
-        // the view transform, in that domain, and comes back to linear for the
-        // drawable. A LUT authored for log input will not be right here — that
-        // needs an input transform Lupp doesn't have yet.
-        if (u.lutEnabled != 0u && u.lutAmount > 0.0) {
-            float3 enc = linearToSrgb(rgb);
-            float3 span = max(u.lutDomainMax.xyz - u.lutDomainMin.xyz, 1e-6);
-            float3 idx = clamp((enc - u.lutDomainMin.xyz) / span, 0.0, 1.0);
-            float3 looked = lut.sample(lutSmp, idx).rgb;
-            rgb = srgbToLinear(mix(enc, looked, u.lutAmount));
+        // Grading happens in the display domain, where both the cube corners and
+        // a creative .cube LUT are defined. One encode/decode pair serves both.
+        // A LUT authored for log input will not be right here — that needs an
+        // input transform Lupp doesn't have yet.
+        bool grading = (u.tetraEnabled != 0u && u.tetraAmount > 0.0)
+                    || (u.lutEnabled != 0u && u.lutAmount > 0.0);
+        if (grading) {
+            float3 enc = clamp(linearToSrgb(rgb), 0.0, 1.0);
+            if (u.tetraEnabled != 0u && u.tetraAmount > 0.0) {
+                enc = mix(enc, tetraInterp(enc, tetra), u.tetraAmount);
+                enc = clamp(enc, 0.0, 1.0);
+            }
+            if (u.lutEnabled != 0u && u.lutAmount > 0.0) {
+                float3 span = max(u.lutDomainMax.xyz - u.lutDomainMin.xyz, 1e-6);
+                float3 idx = clamp((enc - u.lutDomainMin.xyz) / span, 0.0, 1.0);
+                enc = mix(enc, lut.sample(lutSmp, idx).rgb, u.lutAmount);
+            }
+            rgb = srgbToLinear(enc);
         }
 
         if (u.falseColour != 0u) {
@@ -434,6 +609,12 @@ final class Renderer {
 
         // Straight alpha in, opaque out: composite here so the pipeline needs no
         // blending and values above 1.0 survive to the EDR drawable untouched.
+        // Export keeps alpha and encodes here; the screen composites over the
+        // checker and leaves the encode to CoreAnimation.
+        if (u.encodeOutput != 0u) {
+            return float4(linearToSrgb(rgb), alpha);
+        }
+
         float3 bg = float3(BG_LINEAR);
         if (u.showChecker != 0u && alpha < 0.999) {
             float2 g = floor(in.pos.xy / u.checkerSize);

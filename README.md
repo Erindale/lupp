@@ -28,11 +28,16 @@ about what's in the file — including the parts above diffuse white.
   `frame_2` comes before `frame_10`.
 - Nearest-neighbour sampling above 200%, so at high zoom you see the pixels in
   the file rather than the viewer's interpolation.
-- **Scopes panel** (⌥⌘I, or the button in the title bar) — histogram, luma
-  waveform, RGB parade (split or Resolve-style combined), vectorscope with a
-  BT.709 graticule and skin-tone line, and a CIE 1931 xy plot with the spectral
-  locus and Rec.709 / P3 / Rec.2020 gamut triangles. Plus per-channel min/max/mean
-  and clipping percentages.
+- **Two side panels**, toggled independently from the title bar and usable side
+  by side. The **inspector** reports on the image; the **colour** panel changes
+  it. Nothing in the inspector touches a pixel.
+- **Inspector** (⌥⌘I) — histogram, waveform (RGB parade, combined, or luma),
+  vectorscope with a BT.709 graticule and skin-tone line, and a CIE 1931 xy plot
+  with the spectral locus and Rec.709 / P3 / Rec.2020 gamut triangles. Plus
+  per-channel min/max/mean and clipping percentages.
+- **Colour** — a LUT library, an 18-parameter tetrahedral grade, saved presets,
+  and export.
+- **Drag an image onto the window** to open it, as well as Finder and File ▸ Open.
 - **Display controls** in the same panel — isolate R/G/B/A/Luma, a clipping
   overlay, and an ARRI-style false-colour exposure ramp.
 - **View transforms** — Standard, AgX, ACES Filmic and Raw, defaulted from what
@@ -85,11 +90,34 @@ what was detected and whether you're overriding it.
 AgX and ACES here are **analytic approximations**, close to but not identical
 with the reference transforms.
 
+## Grading
+
+**Tetrahedral interpolation**, after
+[hotgluebanjo's TetraInterp](https://github.com/hotgluebanjo/TetraInterp-DCTL).
+The RGB cube splits into six tetrahedra by the ordering of r, g and b; each has
+black and white as two of its vertices, so those — and the whole grey axis
+between them — stay fixed however far the six hue corners are moved. That is what
+makes it a colour *warp* rather than a tint: it cannot push a neutral off
+neutral. Eighteen sliders, laid out as Resolve lays out the DCTL, with a mix
+amount and a reset.
+
+**Presets** store the view transform, exposure, LUT choice and all eighteen
+corner values. Window size and zoom are deliberately excluded — they're how you
+were looking at an image, not what you did to it. *Apply Last* puts back the
+grade you were most recently working in.
+
+**Export as Displayed…** (⇧⌘E) writes the image at full resolution with the view
+transform, LUT, grade and exposure baked in. It renders through the *same shader*
+as the screen, so an export is what you were looking at rather than a second
+implementation that can drift. PNG and JPEG at 8-bit, TIFF at 16-bit.
+
 ## LUTs
 
-`Load LUT…` in the panel takes an Adobe/IRIDAS `.cube` file, 3D or 1D, and
-applies it with an adjustable intensity. It's uploaded as a 3D texture and
-sampled trilinearly — which is precisely what the format describes, so the GPU
+`Add…` in the colour panel takes an Adobe/IRIDAS `.cube` file, 3D or 1D, and
+applies it with an adjustable intensity. Loaded LUTs join a library you can pick
+from or remove entries from; the file is re-read on use, so editing a LUT on disk
+takes effect next time rather than serving a stale copy. It's uploaded as a 3D
+texture and sampled trilinearly — precisely what the format describes, so the GPU
 does the interpolation the format was designed around.
 
 The LUT applies **after** the view transform, on display-encoded (sRGB) values,
@@ -140,7 +168,8 @@ first window you ever open sizes itself to the image.
 | ← → | Previous / next image in the folder |
 | ⌘0 / ⌘1 | Zoom to fit / 1 image pixel per screen pixel |
 | `E` / `⇧E` / `R` | Exposure up / down / reset |
-| ⌥⌘I | Show / hide the scopes panel |
+| ⌥⌘I | Show / hide the inspector panel |
+| ⇧⌘E | Export as displayed |
 | 1–6 | RGB / R / G / B / A / Luma |
 | `C` / `F` | Clipping overlay / false colour |
 

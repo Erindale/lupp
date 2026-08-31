@@ -6,6 +6,7 @@ protocol ImageCanvasDelegate: AnyObject {
     func canvasReadoutChanged(_ canvas: ImageCanvasView)
     func canvasDisplayChanged(_ canvas: ImageCanvasView)
     func canvasWantsNavigation(_ canvas: ImageCanvasView, by delta: Int)
+    func canvas(_ canvas: ImageCanvasView, wantsToOpen urls: [URL])
 }
 
 /// The image surface: zoom, pan, and the eyedropper.
@@ -76,6 +77,36 @@ final class ImageCanvasView: MTKView {
         autoResizeDrawable = true
 
         renderer = Renderer(pixelFormat: colorPixelFormat)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    // MARK: - Drag and drop
+
+    private var dragHighlight = false { didSet { needsDisplay = true } }
+
+    private func imageURLs(from sender: NSDraggingInfo) -> [URL] {
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self], options: opts) as? [URL] ?? []
+        return urls.filter(ImageLoader.canRead)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let ok = !imageURLs(from: sender).isEmpty
+        dragHighlight = ok
+        return ok ? .copy : []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { dragHighlight = false }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) { dragHighlight = false }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        dragHighlight = false
+        let urls = imageURLs(from: sender)
+        guard !urls.isEmpty else { return false }
+        canvasDelegate?.canvas(self, wantsToOpen: urls)
+        return true
     }
 
     required init(coder: NSCoder) { fatalError("not used") }
@@ -90,6 +121,13 @@ final class ImageCanvasView: MTKView {
         let ok = renderer?.loadLUT(lut) ?? false
         needsDisplay = true
         return ok
+    }
+
+    /// The exported pixels come from the same shader as the screen's.
+    func exportImage(bitDepth: Int) -> CGImage? {
+        guard let img = image else { return nil }
+        return renderer?.exportImage(size: CGSize(width: img.width, height: img.height),
+                                     display: display, bitDepth: bitDepth)
     }
 
     func clearLUT() {
@@ -343,6 +381,7 @@ final class ImageCanvasView: MTKView {
 
     override func draw(_ dirtyRect: NSRect) {
         renderer?.draw(in: self, viewport: viewport, display: display,
+                       dragHighlight: dragHighlight,
                        backingScale: window?.backingScaleFactor ?? 1)
     }
 }

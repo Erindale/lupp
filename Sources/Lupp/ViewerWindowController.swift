@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import UniformTypeIdentifiers
 
 /// One window, one image, plus its folder for arrow-key navigation.
@@ -6,11 +7,14 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private let canvas = ImageCanvasView()
     private let readout = ReadoutBar()
     private let scopes = ScopesPanel()
-    /// Distance the panel is pushed past the window's right edge. Animating this
-    /// rather than the panel's width makes it *slide* out at full size; animating
-    /// the width squashes it toward the corner instead.
+    private let grade = GradePanel()
+    /// How far each panel is pushed past its docked position. Animating this
+    /// rather than a width makes them *slide* out at full size; animating the
+    /// width squashes them toward the corner instead.
     private var scopesOffset: NSLayoutConstraint!
+    private var gradeOffset: NSLayoutConstraint!
     private let scopesButton = NSButton()
+    private let gradeButton = NSButton()
 
     private var siblings: [URL] = []
     private var index = 0
@@ -19,10 +23,17 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private var loadToken = 0
     private var scopesToken = 0
     private var hasSizedToImage = false
+    private var currentLUTPath: String?
+    private var currentPresetName: String?
 
     private var scopesOpen: Bool {
         get { Preferences.scopesPanelOpen }
         set { Preferences.scopesPanelOpen = newValue }
+    }
+
+    private var gradeOpen: Bool {
+        get { Preferences.gradePanelOpen }
+        set { Preferences.gradePanelOpen = newValue }
     }
 
     convenience init(url: URL) {
@@ -57,16 +68,19 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         else if let last = AppDelegate.shared?.frontmostViewerFrame, last == window.frame {
             window.setFrameOrigin(NSPoint(x: last.minX + 24, y: last.minY - 24))
         }
-        applyScopesVisibility(animated: false)
-        // Reload the LUT you were last using, so it survives a relaunch.
+        applyPanelVisibility(animated: false)
+        // Reload the LUT you were last using, so it survives a relaunch. This has
+        // to precede refreshLibrary(), or the popup is built from a library that
+        // hasn't been repopulated yet and shows None over a loaded LUT.
+        if Preferences.debug { NSLog("Lupp: lastLUTPath = %@", Preferences.lastLUTPath ?? "(nil)") }
         if let path = Preferences.lastLUTPath {
-            let u = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: path) {
-                applyLUT(at: u, announceFailure: false)
+                applyLUT(at: URL(fileURLWithPath: path), announceFailure: false)
             } else {
                 Preferences.lastLUTPath = nil
             }
         }
+        refreshLibrary()
         open(url: url)
     }
 
@@ -75,20 +89,33 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         content.wantsLayer = true
         content.layer?.backgroundColor = Theme.background.cgColor
 
-        for v in [canvas, scopes, readout] as [NSView] {
+        // Order matters: grade is added first so the scopes panel draws over it
+        // when grade is closed and has slid underneath.
+        for v in [canvas, grade, scopes, readout] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(v)
         }
-        // Clip, so the panel is genuinely out of sight once it has slid past.
+        // Clip, so a panel is genuinely out of sight once it has slid past.
         content.clipsToBounds = true
+
+        // Chained: canvas | grade | scopes. Each panel's offset pushes it past
+        // the one to its right, so either can be closed independently and the
+        // canvas takes back exactly the space that was freed.
         scopesOffset = scopes.trailingAnchor.constraint(equalTo: content.trailingAnchor,
                                                         constant: Theme.panelWidth)
+        gradeOffset = grade.trailingAnchor.constraint(equalTo: scopes.leadingAnchor,
+                                                      constant: Theme.panelWidth)
 
         NSLayoutConstraint.activate([
             canvas.topAnchor.constraint(equalTo: content.topAnchor),
             canvas.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            canvas.trailingAnchor.constraint(equalTo: scopes.leadingAnchor),
+            canvas.trailingAnchor.constraint(equalTo: grade.leadingAnchor),
             canvas.bottomAnchor.constraint(equalTo: readout.topAnchor),
+
+            grade.topAnchor.constraint(equalTo: content.topAnchor),
+            grade.bottomAnchor.constraint(equalTo: readout.topAnchor),
+            grade.widthAnchor.constraint(equalToConstant: Theme.panelWidth),
+            gradeOffset,
 
             scopes.topAnchor.constraint(equalTo: content.topAnchor),
             scopes.bottomAnchor.constraint(equalTo: readout.topAnchor),
@@ -105,24 +132,37 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// The scopes toggle lives in the title bar's right-hand accessory slot, which
     /// is how AppKit puts a control up there without a custom title bar.
     private func buildTitlebarAccessory() {
-        scopesButton.bezelStyle = .texturedRounded
-        scopesButton.isBordered = false
-        scopesButton.image = NSImage(systemSymbolName: "chart.bar.xaxis",
-                                     accessibilityDescription: "Scopes")?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
-        scopesButton.imagePosition = .imageOnly
-        scopesButton.target = self
-        scopesButton.action = #selector(toggleScopes(_:))
-        scopesButton.toolTip = "Scopes — histogram, RGB parade, vectorscope"
-        scopesButton.translatesAutoresizingMaskIntoConstraints = false
+        gradeButton.image = Theme.gradeIcon()
+        gradeButton.toolTip = "Colour — LUT, tetrahedral grade, presets, export"
+        gradeButton.action = #selector(toggleGrade(_:))
 
-        let host = NSView(frame: NSRect(x: 0, y: 0, width: 42, height: 28))
-        host.addSubview(scopesButton)
+        scopesButton.image = NSImage(systemSymbolName: "chart.bar.xaxis",
+                                     accessibilityDescription: "Inspector")?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+        scopesButton.toolTip = "Inspector — histogram, waveform, vectorscope, CIE"
+        scopesButton.action = #selector(toggleScopes(_:))
+
+        for b in [gradeButton, scopesButton] {
+            b.bezelStyle = .texturedRounded
+            b.isBordered = false
+            b.imagePosition = .imageOnly
+            b.target = self
+            b.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        // Left button, left panel: the buttons sit in the order the panels do.
+        let row = NSStackView(views: [gradeButton, scopesButton])
+        row.orientation = .horizontal
+        row.spacing = 2
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 68, height: 28))
+        host.addSubview(row)
         NSLayoutConstraint.activate([
-            host.widthAnchor.constraint(equalToConstant: 42),
+            host.widthAnchor.constraint(equalToConstant: 68),
             host.heightAnchor.constraint(equalToConstant: 28),
-            scopesButton.centerYAnchor.constraint(equalTo: host.centerYAnchor),
-            scopesButton.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -12),
+            row.centerYAnchor.constraint(equalTo: host.centerYAnchor),
+            row.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -12),
         ])
 
         let acc = NSTitlebarAccessoryViewController()
@@ -141,14 +181,45 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         scopes.onFalseColour = { [weak self] on in
             self?.canvas.display.falseColour = on
         }
-        scopes.onLoadLUT = { [weak self] in self?.loadLUT() }
-        scopes.onClearLUT = { [weak self] in
-            guard let self else { return }
-            self.canvas.clearLUT()
-            Preferences.lastLUTPath = nil
-        }
-        scopes.onLUTAmount = { [weak self] a in
+        grade.onExport = { [weak self] in self?.exportImage(nil) }
+        grade.onLoadLUT = { [weak self] in self?.loadLUT() }
+        grade.onClearLUT = { [weak self] in self?.turnLUTOff() }
+        grade.onLUTAmount = { [weak self] a in
             self?.canvas.display.lutAmount = a
+            self?.rememberGrade()
+        }
+        grade.onPickLUT = { [weak self] path in
+            guard let self else { return }
+            if let path { self.applyLUT(at: URL(fileURLWithPath: path), announceFailure: true) }
+            else { self.turnLUTOff() }
+            self.refreshLibrary()
+        }
+        grade.onRemoveLUT = { [weak self] path in
+            guard let self else { return }
+            LUTLibrary.remove(path)
+            if self.currentLUTPath == path { self.turnLUTOff() }
+            self.refreshLibrary()
+        }
+        grade.onTetra = { [weak self] corners, amount, enabled in
+            guard let self else { return }
+            self.canvas.display.tetra = corners
+            self.canvas.display.tetraAmount = amount
+            self.canvas.display.tetraEnabled = enabled
+            self.rememberGrade()
+        }
+        grade.onSavePreset = { [weak self] in self?.savePreset() }
+        grade.onUsePreset = { [weak self] name in
+            guard let self, let p = PresetStore.all.first(where: { $0.name == name }) else { return }
+            self.apply(preset: p)
+        }
+        grade.onDeletePreset = { [weak self] name in
+            PresetStore.delete(named: name)
+            if self?.currentPresetName == name { self?.currentPresetName = nil }
+            self?.refreshLibrary()
+        }
+        grade.onApplyLast = { [weak self] in
+            guard let self, let p = PresetStore.last else { NSSound.beep(); return }
+            self.apply(preset: p)
         }
         scopes.onViewTransform = { [weak self] t in
             guard let self else { return }
@@ -160,6 +231,66 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     private var currentIsSceneLinear: Bool { canvas.image?.isSceneLinear ?? false }
 
+    // MARK: - Grade, LUT library, presets
+
+    private func turnLUTOff() {
+        canvas.clearLUT()
+        currentLUTPath = nil
+        Preferences.lastLUTPath = nil
+        rememberGrade()
+    }
+
+    private func refreshLibrary() {
+        grade.reloadLibrary(selected: currentLUTPath,
+                             presets: PresetStore.all.map(\.name),
+                             selectedPreset: currentPresetName)
+    }
+
+    /// Every grade change updates "last", so a new image can be given the look
+    /// you were just working in without having to name it first.
+    private func rememberGrade() {
+        var p = Preset.from(canvas.display, lutPath: currentLUTPath)
+        p.name = ""
+        PresetStore.last = p
+    }
+
+    private func apply(preset p: Preset) {
+        var d = canvas.display
+        p.apply(to: &d)
+        canvas.display = d
+        if let path = p.lutPath, FileManager.default.fileExists(atPath: path) {
+            applyLUT(at: URL(fileURLWithPath: path), announceFailure: false)
+        } else {
+            canvas.clearLUT()
+            currentLUTPath = nil
+        }
+        currentPresetName = p.name.isEmpty ? nil : p.name
+        refreshLibrary()
+        syncPanelControls()
+    }
+
+    private func savePreset() {
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "Preset name"
+        field.stringValue = currentPresetName ?? ""
+        let a = NSAlert()
+        a.messageText = "Save this grade as a preset"
+        a.informativeText = "Stores the view transform, exposure, LUT choice and the tetrahedral corners. Window size and zoom aren’t included."
+        a.accessoryView = field
+        a.addButton(withTitle: "Save")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = field
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+
+        var p = Preset.from(canvas.display, lutPath: currentLUTPath)
+        p.name = name
+        PresetStore.save(p)
+        currentPresetName = name
+        refreshLibrary()
+    }
+
     private func loadLUT() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
@@ -169,19 +300,29 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         panel.message = "Choose a .cube LUT"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         applyLUT(at: url, announceFailure: true)
+        refreshLibrary()
     }
 
     @discardableResult
     private func applyLUT(at url: URL, announceFailure: Bool) -> Bool {
         do {
             let lut = try CubeLUT.parse(url: url)
-            guard canvas.loadLUT(lut) else { throw CubeLUT.ParseError.unreadable(url) }
+            guard canvas.loadLUT(lut) else {
+                if Preferences.debug { NSLog("Lupp: GPU refused LUT %@ (size %d)", url.lastPathComponent, lut.size) }
+                throw CubeLUT.ParseError.unreadable(url)
+            }
+            if Preferences.debug { NSLog("Lupp: LUT loaded %@ size %d", url.lastPathComponent, lut.size) }
             var name = "\(lut.title) · \(lut.size)³"
             if lut.wasOneDimensional { name += " · from 1D" }
             canvas.display.lutName = name
+            currentLUTPath = url.path
             Preferences.lastLUTPath = url.path
+            LUTLibrary.add(url.path)
+            rememberGrade()
+            refreshLibrary()
             return true
         } catch {
+            if Preferences.debug { NSLog("Lupp: LUT failed %@ — %@", url.lastPathComponent, error.localizedDescription) }
             if announceFailure {
                 let a = NSAlert()
                 a.messageText = "Couldn’t load that LUT"
@@ -196,30 +337,41 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         scopes.show(display: canvas.display,
                     detected: canvas.image.map(ViewTransform.detected(for:)),
                     sceneLinear: currentIsSceneLinear)
+        grade.show(display: canvas.display)
     }
 
     // MARK: - Scopes
 
     @objc func toggleScopes(_ sender: Any?) {
         scopesOpen.toggle()
-        applyScopesVisibility(animated: true)
+        applyPanelVisibility(animated: true)
     }
 
-    private func applyScopesVisibility(animated: Bool) {
-        let target: CGFloat = scopesOpen ? 0 : Theme.panelWidth
-        // Grey when closed, white when open — the accent colour read as an alert
-        // rather than as a state, which is not what a view toggle should say.
+    @objc func toggleGrade(_ sender: Any?) {
+        gradeOpen.toggle()
+        applyPanelVisibility(animated: true)
+    }
+
+    private func applyPanelVisibility(animated: Bool) {
+        // Grey when closed, full strength when open — the accent colour read as
+        // an alert rather than as a state, which is not what a view toggle says.
         scopesButton.contentTintColor = scopesOpen ? .labelColor : .secondaryLabelColor
+        gradeButton.alphaValue = gradeOpen ? 1 : 0.45
+
+        let scopesTarget: CGFloat = scopesOpen ? 0 : Theme.panelWidth
+        let gradeTarget: CGFloat = gradeOpen ? 0 : Theme.panelWidth
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.18
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 ctx.allowsImplicitAnimation = true
-                scopesOffset.animator().constant = target
+                scopesOffset.animator().constant = scopesTarget
+                gradeOffset.animator().constant = gradeTarget
                 window?.contentView?.layoutSubtreeIfNeeded()
             }
         } else {
-            scopesOffset.constant = target
+            scopesOffset.constant = scopesTarget
+            gradeOffset.constant = gradeTarget
         }
         if scopesOpen { recomputeScopes() }
     }
@@ -288,12 +440,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         syncPanelControls()
         recomputeScopes()
 
-        var subtitle = "\(img.fullWidth) × \(img.fullHeight)"
-        subtitle += " · \(shortType(img.typeIdentifier)) \(img.sourceBitDepth)-bit"
-        subtitle += " · \(img.sourceColorSpace)"
-        if img.isHDR { subtitle += " · HDR to \(String(format: "%.2f", img.maxComponent))" }
-        if siblings.count > 1 { subtitle += "  ·  \(index + 1) of \(siblings.count)" }
-        window?.subtitle = subtitle
+        window?.subtitle = subtitleForCurrent()
         window?.makeFirstResponder(canvas)
     }
 
@@ -302,7 +449,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         let avail = screen.visibleFrame.insetBy(dx: 60, dy: 60)
         let native = CGSize(width: CGFloat(img.width) / max(screen.backingScaleFactor, 1),
                             height: CGFloat(img.height) / max(screen.backingScaleFactor, 1))
-        let chrome = scopesOpen ? Theme.panelWidth : 0
+        let chrome = (scopesOpen ? Theme.panelWidth : 0) + (gradeOpen ? Theme.panelWidth : 0)
         let fit = min(1, min((avail.width - chrome) / native.width,
                              (avail.height - ReadoutBar.height) / native.height))
         let size = NSSize(width: max(360, native.width * fit) + chrome,
@@ -328,10 +475,61 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         syncPanelControls()
     }
 
+    /// A dropped file replaces what this window is showing; extra files beyond
+    /// the first open in their own windows, matching what Finder does.
+    func canvas(_ c: ImageCanvasView, wantsToOpen urls: [URL]) {
+        guard let first = urls.first else { return }
+        hasSizedToImage = true          // keep the window the user's, not the file's
+        open(url: first)
+        for extra in urls.dropFirst() { AppDelegate.shared?.present(extra) }
+    }
+
     func canvasWantsNavigation(_ c: ImageCanvasView, by delta: Int) {
         guard siblings.count > 1 else { return }
         index = (index + delta + siblings.count) % siblings.count
         loadCurrent()
+    }
+
+    // MARK: - Export
+
+    /// Writes what is on screen: same shader, same settings, full resolution.
+    @objc func exportImage(_ sender: Any?) {
+        guard let img = canvas.image else { NSSound.beep(); return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png, .tiff, .jpeg]
+        panel.nameFieldStringValue =
+            img.url.deletingPathExtension().lastPathComponent + "-lupp.png"
+        panel.message = "Export the image as displayed — view transform, LUT, grade and exposure baked in."
+        guard panel.runModal() == .OK, let out = panel.url else { return }
+
+        let ext = out.pathExtension.lowercased()
+        // 16 bits for TIFF, where the extra depth is the reason to choose it;
+        // 8 for PNG and JPEG, where it mostly just doubles the file.
+        let bits = (ext == "tif" || ext == "tiff") ? 16 : 8
+        let type: String
+        switch ext {
+        case "tif", "tiff": type = UTType.tiff.identifier
+        case "jpg", "jpeg": type = UTType.jpeg.identifier
+        default:            type = UTType.png.identifier
+        }
+
+        guard let cg = canvas.exportImage(bitDepth: bits),
+              let dest = CGImageDestinationCreateWithURL(out as CFURL, type as CFString, 1, nil)
+        else {
+            let a = NSAlert()
+            a.messageText = "Couldn’t export"
+            a.informativeText = "Rendering the image for export failed."
+            a.runModal()
+            return
+        }
+        var props: [CFString: Any] = [:]
+        if type == UTType.jpeg.identifier { props[kCGImageDestinationLossyCompressionQuality] = 0.95 }
+        CGImageDestinationAddImage(dest, cg, props as CFDictionary)
+        if !CGImageDestinationFinalize(dest) {
+            let a = NSAlert()
+            a.messageText = "Couldn’t write \(out.lastPathComponent)"
+            a.runModal()
+        }
     }
 
     // MARK: - Menu actions
@@ -347,6 +545,33 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     @objc func resetExposure(_ sender: Any?)    { canvas.exposureEV = 0; canvasReadoutChanged(canvas) }
     @objc func toggleClipping(_ sender: Any?)   { canvas.display.showClipping.toggle() }
     @objc func toggleFalseColour(_ sender: Any?) { canvas.display.falseColour.toggle() }
+
+    /// Re-read the folder when the window comes forward: files added or removed
+    /// while it was in the background would otherwise leave "n of m" describing
+    /// a folder that no longer exists in that shape.
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard siblings.indices.contains(index) else { return }
+        let current = siblings[index]
+        let fresh = FolderScanner.siblings(of: current)
+        guard fresh != siblings else { return }
+        siblings = fresh
+        index = fresh.firstIndex(of: current) ?? 0
+        if !fresh.contains(current) {
+            loadCurrent()
+        } else {
+            window?.subtitle = subtitleForCurrent()
+        }
+    }
+
+    private func subtitleForCurrent() -> String {
+        guard let img = canvas.image else { return "" }
+        var s = "\(img.fullWidth) × \(img.fullHeight)"
+        s += " · \(shortType(img.typeIdentifier)) \(img.sourceBitDepth)-bit"
+        s += " · \(img.sourceColorSpace)"
+        if img.isHDR { s += " · HDR to \(String(format: "%.2f", img.maxComponent))" }
+        if siblings.count > 1 { s += "  ·  \(index + 1) of \(siblings.count)" }
+        return s
+    }
 
     func windowWillClose(_ notification: Notification) {
         AppDelegate.shared?.forget(self)
