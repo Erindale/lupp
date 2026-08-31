@@ -243,8 +243,29 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             case .whiteBalance: d.whiteBalanceOn = on
             case .tetra:        d.tetraOn = on
             case .lut:          d.lutOn = on
+            case .crop:         d.cropEnabled = on
             }
             self.canvas.display = d
+        }
+        grade.onCropReset = { [weak self] in
+            self?.canvas.display.crop = SIMD4<Float>(0, 0, 1, 1)
+        }
+        grade.onCropAspect = { [weak self] aspect in
+            guard let self, let img = self.canvas.image else { return }
+            guard var a = aspect else { return }          // Free: leave it alone
+            if a == 0 { a = Double(img.width) / Double(img.height) }   // Original
+            var c = self.canvas.display.crop
+            // Fit the requested ratio inside the current crop, keeping its centre,
+            // so choosing a ratio refines what you have rather than starting over.
+            let cx = Double(c.x) + Double(c.z) / 2
+            let cy = Double(c.y) + Double(c.w) / 2
+            let pxW = Double(img.width), pxH = Double(img.height)
+            var w = Double(c.z), h = Double(c.w)
+            if (w * pxW) / (h * pxH) > a { w = (h * pxH * a) / pxW } else { h = (w * pxW / a) / pxH }
+            c.z = Float(min(w, 1)); c.w = Float(min(h, 1))
+            c.x = Float(min(max(cx - Double(c.z) / 2, 0), 1 - Double(c.z)))
+            c.y = Float(min(max(cy - Double(c.w) / 2, 0), 1 - Double(c.w)))
+            self.canvas.display.crop = c
         }
         grade.onSavePreset = { [weak self] in self?.savePreset() }
         grade.onUsePreset = { [weak self] name in
@@ -378,6 +399,12 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
                     detected: canvas.image.map(ViewTransform.detected(for:)),
                     sceneLinear: currentIsSceneLinear)
         grade.show(display: canvas.display)
+        if let img = canvas.image {
+            let c = canvas.display.cropPixels(imageWidth: img.width, imageHeight: img.height)
+            grade.showCropSize(canvas.display.cropEnabled
+                ? "\(c.w) × \(c.h) px   from \(img.width) × \(img.height)"
+                : "Whole image")
+        }
     }
 
     // MARK: - Scopes

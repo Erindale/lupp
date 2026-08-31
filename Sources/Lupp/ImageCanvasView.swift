@@ -16,6 +16,7 @@ final class ImageCanvasView: MTKView {
     weak var canvasDelegate: ImageCanvasDelegate?
 
     private var renderer: Renderer?
+    let cropOverlay = CropOverlayView()
     private(set) var image: FloatImage?
     private var viewport = Viewport()
 
@@ -26,9 +27,20 @@ final class ImageCanvasView: MTKView {
     var display = Renderer.DisplayState() {
         didSet {
             needsDisplay = true
+            cropOverlay.isHidden = !display.cropEnabled
+            if cropOverlay.crop != display.crop { cropOverlay.crop = display.crop }
             canvasDelegate?.canvasReadoutChanged(self)
             canvasDelegate?.canvasDisplayChanged(self)
         }
+    }
+
+    /// Where the image quad currently sits in view coordinates. The crop overlay
+    /// needs this to place itself; nothing else outside the canvas does.
+    var imageViewRect: CGRect {
+        guard let i = image else { return .zero }
+        return CGRect(x: viewport.origin.x, y: viewport.origin.y,
+                      width: CGFloat(i.width) * viewport.scale,
+                      height: CGFloat(i.height) * viewport.scale)
     }
 
     var exposureEV: Float {
@@ -88,6 +100,21 @@ final class ImageCanvasView: MTKView {
 
         renderer = Renderer(pixelFormat: colorPixelFormat)
         registerForDraggedTypes([.fileURL])
+
+        cropOverlay.imageRectProvider = { [weak self] in self?.imageViewRect ?? .zero }
+        cropOverlay.onChange = { [weak self] c in
+            guard let self else { return }
+            self.display.crop = c
+        }
+        cropOverlay.isHidden = true
+        cropOverlay.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(cropOverlay)
+        NSLayoutConstraint.activate([
+            cropOverlay.topAnchor.constraint(equalTo: topAnchor),
+            cropOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            cropOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            cropOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
     }
 
     // MARK: - Drag and drop
@@ -218,6 +245,8 @@ final class ImageCanvasView: MTKView {
 
     private func refresh() {
         needsDisplay = true
+        cropOverlay.needsDisplay = true
+        window?.invalidateCursorRects(for: cropOverlay)
         updateReadout(at: window?.mouseLocationOutsideOfEventStream)
     }
 
@@ -353,6 +382,7 @@ final class ImageCanvasView: MTKView {
         viewport.pan(by: CGSize(width: e.deltaX, height: e.deltaY))
         viewport.clamp(viewSize: bounds.size, imageSize: imageSize)
         needsDisplay = true
+        cropOverlay.needsDisplay = true
     }
 
     private func endPan() {
@@ -434,6 +464,7 @@ final class ImageCanvasView: MTKView {
         applyInitialFitIfNeeded()
         viewport.clamp(viewSize: bounds.size, imageSize: imageSize)
         needsDisplay = true
+        cropOverlay.needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {

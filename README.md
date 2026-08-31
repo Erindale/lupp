@@ -98,11 +98,18 @@ with the reference transforms.
 The colour panel reads top to bottom in the order the pixels travel: light, then
 the cube warp, then a LUT on top, then what to do with the result.
 
-**Every section has an A/B switch** beside its title, and there's a master one at
+**Every section has a `0|1` bypass** beside its title, and there's a master one at
 the top (`B`). A bypassed section keeps its values and simply stops being applied,
 so comparing costs nothing and switching back returns exactly where you were —
 and you can isolate one change at a time rather than judging the whole grade at
-once.
+once. A two-segment switch rather than a tick box: 0/1 reads as a signal path
+being broken and remade, which is what a bypass is.
+
+**Crop** — drag the rectangle on the image, with rule-of-thirds guides and aspect
+presets that refine the crop you already have rather than starting it over.
+Export writes the crop **at its own pixel size**, not the whole frame with the
+edges painted out. It's a window into the source texture, so a cropped export
+goes through the same shader as everything else.
 
 **Light** — black and white point, exposure (EV), a three-channel white balance,
 and a contrast with an adjustable pivot. Black and white point come first, since

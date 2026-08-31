@@ -194,36 +194,30 @@ class SidePanel: NSView {
     }
 }
 
-/// A section title row: an optional A/B checkbox, the title, and a reset arrow.
+/// A section title row: the title, a small [0|1] bypass switch, and a reset.
+///
+/// A two-segment switch rather than a checkbox: a tick reads as "this option is
+/// on", while 0/1 reads as a signal path being broken and remade, which is what
+/// a bypass is. It also sits in the same visual language as the rest of the
+/// panel's segmented controls.
 final class SectionHeader: NSView {
-    private let check: NSButton?
+    private let bypass: NSSegmentedControl?
     private let label: ThemedLabel
+    private var toggleHandler: ((Bool) -> Void)?
 
     var isOn: Bool {
-        get { check?.state == .on }
-        set { check?.state = newValue ? .on : .off }
+        get { bypass.map { $0.selectedSegment == 1 } ?? true }
+        set { bypass?.selectedSegment = newValue ? 1 : 0 }
     }
 
     init(title: String, toggle: ((Bool) -> Void)?, reset: @escaping () -> Void) {
         label = ThemedLabel(title, role: .tertiary, size: 9, weight: .semibold)
-        if let toggle {
-            let b = ActionButton(action: {})
-            b.setButtonType(.switch)
-            b.title = ""
-            b.controlSize = .small
-            check = b
-        } else {
-            check = nil
-        }
+        bypass = toggle == nil ? nil
+            : NSSegmentedControl(labels: ["0", "1"], trackingMode: .selectOne,
+                                 target: nil, action: nil)
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-
-        if let check, let toggle {
-            // Re-target now that self exists, so the closure can read the state.
-            check.target = self
-            check.action = #selector(toggled)
-            self.toggleHandler = toggle
-        }
+        toggleHandler = toggle
 
         let resetButton = ActionButton(action: reset)
         resetButton.image = NSImage(systemSymbolName: "arrow.counterclockwise",
@@ -235,9 +229,18 @@ final class SectionHeader: NSView {
         resetButton.contentTintColor = Theme.text(.tertiary)
         resetButton.toolTip = "Reset \(title.lowercased()) to defaults"
 
-        var views: [NSView] = []
-        if let check { views.append(check) }
-        views.append(contentsOf: [label, resetButton])
+        var views: [NSView] = [label, resetButton]
+        if let bypass {
+            bypass.segmentStyle = .rounded
+            bypass.controlSize = .mini
+            bypass.font = .systemFont(ofSize: 9, weight: .medium)
+            bypass.selectedSegment = 1
+            bypass.selectedSegmentBezelColor = Theme.controlFill
+            bypass.target = self
+            bypass.action = #selector(toggled)
+            bypass.toolTip = "Bypass \(title.lowercased()) — compare with and without"
+            views.append(bypass)
+        }
         for v in views {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
@@ -245,29 +248,25 @@ final class SectionHeader: NSView {
 
         var c: [NSLayoutConstraint] = [
             heightAnchor.constraint(equalToConstant: 16),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             resetButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             resetButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             resetButton.widthAnchor.constraint(equalToConstant: 16),
             resetButton.heightAnchor.constraint(equalToConstant: 14),
         ]
-        if let check {
-            check.state = .on
-            check.toolTip = "Bypass \(title.lowercased()) — compare with and without"
+        if let bypass {
             c += [
-                check.leadingAnchor.constraint(equalTo: leadingAnchor),
-                check.centerYAnchor.constraint(equalTo: centerYAnchor),
-                label.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 2),
+                bypass.trailingAnchor.constraint(equalTo: resetButton.leadingAnchor, constant: -6),
+                bypass.centerYAnchor.constraint(equalTo: centerYAnchor),
+                bypass.widthAnchor.constraint(equalToConstant: 40),
+                bypass.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
             ]
-        } else {
-            c.append(label.leadingAnchor.constraint(equalTo: leadingAnchor))
         }
         NSLayoutConstraint.activate(c)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    private var toggleHandler: ((Bool) -> Void)?
 
     @objc private func toggled() { toggleHandler?(isOn) }
 }

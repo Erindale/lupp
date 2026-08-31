@@ -8,7 +8,7 @@ import simd
 /// wanting to grade is not the same as wanting to watch scopes while you do it.
 final class GradePanel: SidePanel {
     /// Which part of the chain a bypass switch belongs to.
-    enum Section { case master, light, whiteBalance, tetra, lut }
+    enum Section { case master, light, whiteBalance, tetra, lut, crop }
 
     var onLoadLUT: (() -> Void)?
     var onClearLUT: (() -> Void)?
@@ -24,6 +24,9 @@ final class GradePanel: SidePanel {
     var onApplyLast: (() -> Void)?
     var onExport: (() -> Void)?
     var onBypass: ((Section, Bool) -> Void)?
+    /// Aspect ratio as width/height, or nil for free.
+    var onCropAspect: ((Double?) -> Void)?
+    var onCropReset: (() -> Void)?
 
     private let lutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let lutButtons = NSSegmentedControl(labels: ["Add…", "Remove", "Off"],
@@ -55,7 +58,16 @@ final class GradePanel: SidePanel {
     private let exportButton = NSButton(title: "Export as Displayed…",
                                         target: nil, action: nil)
 
-    private let masterToggle = NSButton()
+    private var masterHeader: SectionHeader!
+    private var cropHeader: SectionHeader!
+    private let cropAspect = NSPopUpButton(frame: .zero, pullsDown: false)
+    private lazy var cropSize = caption("Whole image")
+
+    /// Width/height, nil meaning free.
+    private static let aspects: [(String, Double?)] = [
+        ("Free", nil), ("Original", 0), ("1:1", 1), ("4:3", 4.0/3), ("3:2", 1.5),
+        ("16:9", 16.0/9), ("2.39:1", 2.39), ("3:4", 0.75), ("2:3", 2.0/3), ("9:16", 9.0/16),
+    ]
     private var lightHeader: SectionHeader!
     private var wbHeader: SectionHeader!
     private var tetraHeader: SectionHeader!
@@ -122,22 +134,29 @@ final class GradePanel: SidePanel {
                                     toggle: { [weak self] on in
                                         self?.emit { self?.onBypass?(.tetra, on) } },
                                     reset: { [weak self] in self?.resetTetra() })
+        cropHeader = sectionHeader("Crop",
+                                   toggle: { [weak self] on in
+                                       self?.emit { self?.onBypass?(.crop, on) } },
+                                   reset: { [weak self] in self?.emit { self?.onCropReset?() } })
+        cropHeader.isOn = false
+        style(cropAspect)
+        cropAspect.target = self
+        cropAspect.action = #selector(cropAspectChanged(_:))
+        for (name, _) in GradePanel.aspects { cropAspect.addItem(withTitle: name) }
+
         lutHeader = sectionHeader("LUT",
                                   toggle: { [weak self] on in
                                       self?.emit { self?.onBypass?(.lut, on) } },
                                   reset: { [weak self] in self?.emit { self?.onClearLUT?() } })
 
-        masterToggle.setButtonType(.switch)
-        masterToggle.title = "  Grading enabled   (B)"
-        masterToggle.font = .systemFont(ofSize: 11)
-        masterToggle.state = .on
-        masterToggle.target = self
-        masterToggle.action = #selector(masterToggled)
-        masterToggle.translatesAutoresizingMaskIntoConstraints = false
+        masterHeader = sectionHeader("Grading   (B)",
+                                     toggle: { [weak self] on in
+                                         self?.emit { self?.onBypass?(.master, on) } },
+                                     reset: { [weak self] in self?.resetEverything() })
 
         var column: [NSView] = [
-            masterToggle,
-            caption("Every switch below bypasses its section without discarding it — toggling back returns exactly where you were."),
+            masterHeader,
+            caption("Each 0|1 bypasses its section without discarding it — switch back and you are exactly where you were."),
             separator(),
             lightHeader, blackRow, whiteRow, exposureRow, contrastRow, pivotRow,
             wbHeader, wbRows[0], wbRows[1], wbRows[2],
@@ -151,18 +170,26 @@ final class GradePanel: SidePanel {
         // Order down the panel is the order the pixels travel: light, then the
         // cube warp, then the LUT on top, then what to do with the result.
         column += [separator(),
+                   cropHeader, cropAspect, cropSize,
+                   caption("Drag the rectangle on the image. Export writes the crop at its own pixel size, not the whole frame with the edges painted out."),
+                   separator(),
                    lutHeader, lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
                    separator(),
                    sectionLabel("Presets"), presetPopup, presetButtons, savePresetButton,
                    separator(),
                    sectionLabel("Export"), exportButton, exportNote]
 
-        install(column: column,
-                fullWidth: [lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
-                            tetraAmount, tetraNote, lightNote, savePresetButton,
-                            presetPopup, presetButtons, exportButton, exportNote,
-                            lightHeader, wbHeader, tetraHeader, lutHeader, masterToggle]
-                        + tetraRowViews + lightRows + balanceRows)
+        // Built in named pieces: one literal mixing this many control types is
+        // more than the type checker will do in reasonable time.
+        var wide: [NSView] = [lutPopup, lutButtons, lutLabel, lutSlider, lutNote]
+        wide += [tetraAmount, tetraNote, lightNote, savePresetButton] as [NSView]
+        wide += [presetPopup, presetButtons, exportButton, exportNote] as [NSView]
+        wide += [masterHeader, lightHeader, wbHeader, tetraHeader, lutHeader] as [NSView]
+        wide += [cropHeader, cropAspect, cropSize] as [NSView]
+        wide += tetraRowViews
+        wide += lightRows as [NSView]
+        wide += balanceRows as [NSView]
+        install(column: column, fullWidth: wide)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -209,8 +236,17 @@ final class GradePanel: SidePanel {
         emit { onTetra?(corners, amount, !corners.isIdentity) }
     }
 
-    @objc private func masterToggled() {
-        emit { onBypass?(.master, masterToggle.state == .on) }
+    private func resetEverything() {
+        for row in lightAndBalanceRows { row.resetToDefault() }
+        for row in tetraRows { row.resetToDefault() }
+        tetraAmount.doubleValue = 100
+        lightChanged()
+        tetraChanged(nil)
+    }
+
+    @objc private func cropAspectChanged(_ sender: NSPopUpButton) {
+        let a = GradePanel.aspects[min(sender.indexOfSelectedItem, GradePanel.aspects.count - 1)].1
+        emit { onCropAspect?(a) }
     }
 
     @objc private func savePresetPressed(_ sender: Any?) {
@@ -302,10 +338,13 @@ final class GradePanel: SidePanel {
         }
     }
 
+    func showCropSize(_ text: String) { cropSize.stringValue = text }
+
     func show(display: Renderer.DisplayState) {
         // Bypass switches and the LUT readout are safe to refresh at any time:
         // none of them is the control being clicked.
-        masterToggle.state = display.gradeEnabled ? .on : .off
+        masterHeader.isOn = display.gradeEnabled
+        cropHeader.isOn = display.cropEnabled
         lightHeader.isOn = display.lightOn
         wbHeader.isOn = display.whiteBalanceOn
         tetraHeader.isOn = display.tetraOn

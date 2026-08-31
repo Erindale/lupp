@@ -38,6 +38,11 @@ final class Renderer {
         var lutDomainMin: SIMD4<Float>
         var lutDomainMax: SIMD4<Float>
         var whiteBalance: SIMD4<Float>
+        /// Which part of the source texture the quad samples: u0, v0, u1, v1.
+        /// The screen always draws the whole image; export narrows this to the
+        /// crop, so a cropped export goes through the same shader as everything
+        /// else rather than being assembled separately afterwards.
+        var uvRect: SIMD4<Float>
         var exposure: Float
         var checkerSize: Float
         var lutAmount: Float
@@ -97,6 +102,21 @@ final class Renderer {
         /// Set by the panel when the corners are away from identity; there is
         /// nothing to apply when they are not.
         var tetraActive = false
+
+        /// Crop in normalised image coordinates, origin top-left. Kept normalised
+        /// so it survives zooming and means the same thing at any window size.
+        var cropEnabled = false
+        var crop = SIMD4<Float>(0, 0, 1, 1)   // x, y, w, h
+
+        /// The crop in pixels, for the export and the readout.
+        func cropPixels(imageWidth w: Int, imageHeight h: Int) -> (x: Int, y: Int, w: Int, h: Int) {
+            guard cropEnabled else { return (0, 0, w, h) }
+            let x = Int((crop.x * Float(w)).rounded())
+            let y = Int((crop.y * Float(h)).rounded())
+            let cw = max(1, Int((crop.z * Float(w)).rounded()))
+            let ch = max(1, Int((crop.w * Float(h)).rounded()))
+            return (min(x, w - 1), min(y, h - 1), min(cw, w - x), min(ch, h - y))
+        }
         var viewTransform: ViewTransform = .standard
         var channel: ChannelView = .rgb
         var showClipping = false
@@ -302,8 +322,17 @@ final class Renderer {
     /// transparency should survive into the file rather than be painted over.
     func exportImage(size: CGSize, display: DisplayState, bitDepth: Int) -> CGImage? {
         guard let source = texture else { return nil }
-        let w = Int(size.width), h = Int(size.height)
-        guard w > 0, h > 0 else { return nil }
+        let full = (w: Int(size.width), h: Int(size.height))
+        guard full.w > 0, full.h > 0 else { return nil }
+
+        // Export the crop at its own pixel size — a crop should produce a smaller
+        // file, not the same file with the surroundings painted out.
+        let c = display.cropPixels(imageWidth: full.w, imageHeight: full.h)
+        let w = c.w, h = c.h
+        let uv = SIMD4<Float>(Float(c.x) / Float(full.w),
+                              Float(c.y) / Float(full.h),
+                              Float(c.x + c.w) / Float(full.w),
+                              Float(c.y + c.h) / Float(full.h))
 
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float, width: w, height: h, mipmapped: false)
@@ -324,7 +353,7 @@ final class Renderer {
               let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
 
         var u = uniforms(for: display, rect: SIMD4<Float>(-1, -1, 1, 1),
-                         checkerSize: 1, showChecker: 0, encodeOutput: 1)
+                         checkerSize: 1, showChecker: 0, encodeOutput: 1, uvRect: uv)
         var tetra = display.tetra
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -421,7 +450,8 @@ final class Renderer {
     /// scopes cannot quietly disagree about how the image is being rendered.
     private func uniforms(for display: DisplayState, rect: SIMD4<Float>,
                           checkerSize: Float, showChecker: UInt32,
-                          encodeOutput: UInt32) -> Uniforms {
+                          encodeOutput: UInt32,
+                          uvRect: SIMD4<Float> = SIMD4(0, 0, 1, 1)) -> Uniforms {
         // Bypasses are resolved here rather than in the shader: a switched-off
         // section is simply fed its identity values, so there is one code path
         // through the fragment function and no branch that can drift.
@@ -435,6 +465,7 @@ final class Renderer {
                  lutDomainMin: lutDomainMin,
                  lutDomainMax: lutDomainMax,
                  whiteBalance: balance ? SIMD4(display.whiteBalance, 0) : SIMD4(1, 1, 1, 0),
+                 uvRect: uvRect,
                  exposure: light ? pow(2, display.exposureEV) : 1,
                  checkerSize: checkerSize,
                  lutAmount: display.lutAmount,
@@ -500,6 +531,7 @@ final class Renderer {
         float4 lutDomainMin;
         float4 lutDomainMax;
         float4 whiteBalance;
+        float4 uvRect;
         float  exposure;
         float  checkerSize;
         float  lutAmount;
@@ -658,7 +690,8 @@ final class Renderer {
         float2 c = float2(float(vid & 1u), float((vid >> 1) & 1u));
         VOut o;
         o.pos = float4(mix(u.rect.xy, u.rect.zw, c), 0.0, 1.0);
-        o.uv  = float2(c.x, 1.0 - c.y);
+        // Window into the source, so a cropped export samples only what it keeps.
+        o.uv  = mix(u.uvRect.xy, u.uvRect.zw, float2(c.x, 1.0 - c.y));
         return o;
     }
 
