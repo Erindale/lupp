@@ -713,18 +713,22 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         case .found(let u):
             imageURL = u
         case .moved(let u):
-            // The bookmark exists precisely so a moved file is not an event.
-            // Repair the record quietly rather than interrupting to report it.
+            // The bookmark exists precisely so a moved file is not an event: use
+            // what it found and carry on. The file on disk is left exactly as it
+            // was — a session is only ever written when you ask for one.
             imageURL = u
-            session.relocate(to: u)
-            try? session.write(to: url)
         case .missing(let path):
             guard let located = askToLocate(missing: path) else { return }
             imageURL = located
+            // Written back, because you just chose this file: the session is
+            // already open and broken, and repairing it is the point of having
+            // been asked. Distinct from the moved case above, which resolves on
+            // its own and so has no choice of yours to act on.
             session.relocate(to: located)
             try? session.write(to: url)
         }
 
+        // Remembered only so Save Session offers to overwrite the same file.
         sessionURL = url
         pendingSession = session
         hasSizedToImage = true      // the window is the user's, not the session's
@@ -735,12 +739,14 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     ///
     /// A session that only reports the problem makes you repair it by hand in a
     /// text editor; one that lets you point at the file turns a dead end into two
-    /// clicks. Whatever is chosen is written back, so it is asked once.
+    /// clicks. What you pick is written back, since a broken session that stays
+    /// broken would ask again every time — and unlike a move the bookmark can
+    /// resolve on its own, there is an explicit choice of yours to record.
     private func askToLocate(missing path: String) -> URL? {
         let name = (path as NSString).lastPathComponent
         let a = NSAlert()
         a.messageText = "Can’t find “\(name)”"
-        a.informativeText = "This session refers to an image at:\n\(path)\n\nA session records where an image lives rather than embedding it. If you’ve moved or renamed it, point Lupp at it and the session will be updated to match."
+        a.informativeText = "This session refers to an image at:\n\(path)\n\nA session records where an image lives rather than embedding it. Point Lupp at the file and the session will be updated to match, so it only has to ask once."
         a.addButton(withTitle: "Find…")
         a.addButton(withTitle: "Cancel")
         guard a.runModal() == .alertFirstButtonReturn else { return nil }

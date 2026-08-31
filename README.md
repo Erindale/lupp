@@ -342,10 +342,17 @@ path and a file-system bookmark are stored: the path is what you can read and fi
 in a text editor, the bookmark is what still finds the file after it has been
 moved or renamed.
 
-If the image can't be found at all, Lupp names it, shows where it used to be, and
-offers **Find…** so you can point at it — starting the file picker in the folder
-it used to live in, since a moved file is often still nearby. Whatever you choose
-is written back into the session, so it asks once rather than every time.
+**A session is only ever written when you ask for one.** There is no autosave and
+no periodic write; open an image, grade it, close it, and nothing is left behind.
+Sessions are for the occasional image worth coming back to, not a record of
+everything you looked at.
+
+The one exception is repairing a session you already have. If its image can't be
+found, Lupp names it, shows where it used to be, and offers **Find…** — opening
+the picker in the folder it came from, since a moved file is usually still
+nearby. What you point it at *is* written back, because you chose it and because
+a session left broken would ask again every time. A move the bookmark can resolve
+by itself doesn't write anything at all: there's no choice of yours to record.
 
 ## The icon
 
