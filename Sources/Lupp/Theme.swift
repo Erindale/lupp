@@ -8,7 +8,15 @@ import Foundation
 /// *linear* space. Handing the same number to both would make the canvas
 /// visibly lighter than the title bar it is meant to be continuous with.
 enum Theme {
-    static let backgroundSRGB: CGFloat = 0.26
+    static let defaultBackgroundSRGB: CGFloat = 0.26
+
+    /// Adjustable, because the right backdrop depends on the image: a bright
+    /// surround makes a dark frame look washed out, and vice versa. Right-drag on
+    /// the canvas changes it.
+    static var backgroundSRGB: CGFloat {
+        get { Preferences.backgroundLevel }
+        set { Preferences.backgroundLevel = min(max(newValue, 0.02), 0.92) }
+    }
 
     static var background: NSColor {
         NSColor(srgbRed: backgroundSRGB, green: backgroundSRGB, blue: backgroundSRGB, alpha: 1)

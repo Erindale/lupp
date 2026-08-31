@@ -192,7 +192,16 @@ enum Selftest {
         for i in stride(from: 3, to: bytes.count, by: 4) { bytes[i] = 255 }
         guard writeInteger(bytes, width: 64, height: 64, to: url, type: UTType.png.identifier),
               let img = try? ImageLoader.load(url: url),
-              let s = Scopes.compute(from: img) else {
+              let renderer = Renderer(pixelFormat: .rgba16Float) else {
+            return fail("scopes", "could not set up")
+        }
+        renderer.upload(img)
+        var plainDisplay = Renderer.DisplayState()
+        plainDisplay.viewTransform = .standard
+        guard let sampled = renderer.renderSampled(display: plainDisplay, maxDimension: 64),
+              let s = Scopes.compute(graded: sampled.data, width: sampled.width,
+                                     height: sampled.height,
+                                     stats: Scopes.sourceStats(from: img)) else {
             return fail("scopes", "could not compute")
         }
 

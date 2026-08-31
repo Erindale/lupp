@@ -50,6 +50,22 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: "lastLUTPath") }
     }
 
+    /// The export format you chose last, so the panel opens on it again.
+    static var lastExportExtension: String {
+        get { UserDefaults.standard.string(forKey: "lastExportExtension") ?? "png" }
+        set { UserDefaults.standard.set(newValue, forKey: "lastExportExtension") }
+    }
+
+    /// Canvas and chrome backdrop, in sRGB.
+    static var backgroundLevel: CGFloat {
+        get {
+            guard let v = UserDefaults.standard.object(forKey: "backgroundLevel") as? Double
+            else { return Theme.defaultBackgroundSRGB }
+            return CGFloat(v)
+        }
+        set { UserDefaults.standard.set(Double(newValue), forKey: "backgroundLevel") }
+    }
+
     /// Flips scroll-zoom direction. Present because no amount of reasoning about
     /// `isDirectionInvertedFromDevice` settles what a given mouse and driver
     /// combination will actually send — this makes it one click to correct.

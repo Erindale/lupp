@@ -7,6 +7,7 @@ protocol ImageCanvasDelegate: AnyObject {
     func canvasDisplayChanged(_ canvas: ImageCanvasView)
     func canvasWantsNavigation(_ canvas: ImageCanvasView, by delta: Int)
     func canvas(_ canvas: ImageCanvasView, wantsToOpen urls: [URL])
+    func canvasDidChangeBackground(_ canvas: ImageCanvasView)
 }
 
 /// The image surface: zoom, pan, and the eyedropper.
@@ -67,8 +68,7 @@ final class ImageCanvasView: MTKView {
         (layer as? CAMetalLayer)?.wantsExtendedDynamicRangeContent = true
         // Linear, because the drawable is extended-linear — the same colour the
         // chrome uses, converted once in Theme so the two can't drift apart.
-        let bg = Theme.backgroundLinear
-        clearColor = MTLClearColor(red: bg, green: bg, blue: bg, alpha: 1)
+        applyBackground()
 
         // A still image has no reason to redraw at 120 Hz. Draw on demand only —
         // this is most of what "lightweight" means in practice.
@@ -121,6 +121,13 @@ final class ImageCanvasView: MTKView {
         let ok = renderer?.loadLUT(lut) ?? false
         needsDisplay = true
         return ok
+    }
+
+    /// A small graded render for the scopes to measure — same shader as the
+    /// screen, so the traces and the picture always agree.
+    func renderSampled(maxDimension: Int) -> (data: [Float], width: Int, height: Int)? {
+        guard image != nil else { return nil }
+        return renderer?.renderSampled(display: display, maxDimension: maxDimension)
     }
 
     /// The exported pixels come from the same shader as the screen's.
@@ -282,6 +289,37 @@ final class ImageCanvasView: MTKView {
     }
 
     override func mouseUp(with e: NSEvent) { endPan() }
+
+    // Right-drag sets the backdrop. Right-click has no menu here to compete with,
+    // and judging an image against the wrong surround is a real problem — a bright
+    // one makes a dark frame look washed out — so it deserves a gesture rather
+    // than a trip to a preferences pane.
+    private var backgroundDragStart: (y: CGFloat, level: CGFloat)?
+
+    override func rightMouseDown(with e: NSEvent) {
+        backgroundDragStart = (e.locationInWindow.y, Theme.backgroundSRGB)
+    }
+
+    override func rightMouseDragged(with e: NSEvent) {
+        guard let start = backgroundDragStart else { return }
+        // Up is lighter. 300pt of travel covers the whole usable range, which is
+        // enough to be precise without needing the whole screen.
+        let delta = (e.locationInWindow.y - start.y) / 300
+        Theme.backgroundSRGB = start.level + delta
+        applyBackground()
+        canvasDelegate?.canvasDidChangeBackground(self)
+    }
+
+    override func rightMouseUp(with e: NSEvent) { backgroundDragStart = nil }
+
+    /// True while the backdrop is being dragged, so the readout can show its value.
+    var isAdjustingBackground: Bool { backgroundDragStart != nil }
+
+    func applyBackground() {
+        let bg = Theme.backgroundLinear
+        clearColor = MTLClearColor(red: bg, green: bg, blue: bg, alpha: 1)
+        needsDisplay = true
+    }
 
     override func mouseMoved(with e: NSEvent) {
         updateReadout(at: e.locationInWindow)

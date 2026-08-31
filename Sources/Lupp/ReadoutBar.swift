@@ -39,6 +39,10 @@ final class ReadoutBar: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    func refreshBackground() {
+        layer?.backgroundColor = Theme.background.cgColor
+    }
+
     private static func label(alignment: NSTextAlignment) -> NSTextField {
         let f = NSTextField(labelWithString: "")
         f.font = .monospacedSystemFont(ofSize: 11, weight: .regular)

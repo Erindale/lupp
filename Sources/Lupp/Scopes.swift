@@ -4,14 +4,17 @@ import simd
 
 /// Histogram, RGB parade and vectorscope, rasterised once per image.
 ///
-/// Computed on the display-encoded (sRGB) values rather than the linear ones the
-/// eyedropper reports. That is not an inconsistency: every grading tool — Resolve
-/// included — puts its scopes in the display domain, and a linear histogram piles
-/// almost everything into the bottom eighth of the graph and is unreadable. The
-/// readout says linear, the scopes say sRGB, and both are labelled.
+/// Measured on the **graded** image, rendered through the same shader as the
+/// canvas — not on the source file. A histogram that ignores the grade would
+/// disagree with the picture beside it, which is worse than no histogram.
 ///
-/// Rasterised once and cached because these are whole-image reductions: doing
-/// them per frame would make panning cost as much as loading.
+/// The samples arrive display-encoded, which is where scopes belong: every
+/// grading tool puts them there, and a linear histogram piles almost everything
+/// into the bottom eighth of the graph. The CIE plot linearises them again for
+/// itself, because chromaticity is a property of the light.
+///
+/// `stats` still describes the *source* file, so the panel can report what the
+/// file contains while the traces report what you have made of it.
 struct Scopes {
     let histogram: CGImage
     /// Three side-by-side channel panels.
@@ -39,14 +42,44 @@ struct Scopes {
         var sampleCount = 0
     }
 
-    /// Cap on samples examined. Beyond this the scopes are statistically
-    /// identical and just slower, so stride over the image instead.
-    private static let maxSamples = 600_000
+    /// Longest edge of the render the scopes measure. Small enough to redraw on
+    /// every slider tick, large enough that the traces are indistinguishable from
+    /// measuring every pixel.
+    static let sampleExtent = 512
 
-    static func compute(from image: FloatImage) -> Scopes? {
+    /// Source-file facts, measured once at load — unaffected by grading.
+    static func sourceStats(from image: FloatImage) -> Stats {
+        var stats = Stats()
+        var sum = SIMD3<Double>(repeating: 0)
         let total = image.width * image.height
-        guard total > 0 else { return nil }
-        let step = max(1, Int((Double(total) / Double(maxSamples)).rounded(.up)))
+        let step = max(1, Int((Double(total) / 600_000.0).rounded(.up)))
+        let p = image.pixels
+        var i = 0
+        while i < total {
+            let o = i * 4
+            let lin = SIMD3<Float>(p[o], p[o + 1], p[o + 2])
+            stats.min = simd_min(stats.min, lin)
+            stats.max = simd_max(stats.max, lin)
+            sum += SIMD3<Double>(Double(lin.x), Double(lin.y), Double(lin.z))
+            if lin.x > 1 || lin.y > 1 || lin.z > 1 { stats.aboveOne += 1 }
+            if lin.x >= 1 || lin.y >= 1 || lin.z >= 1 { stats.clippedHigh += 1 }
+            if lin.x <= 0 || lin.y <= 0 || lin.z <= 0 { stats.clippedLow += 1 }
+            stats.sampleCount += 1
+            i += step
+        }
+        if stats.sampleCount > 0 {
+            let n = Double(stats.sampleCount)
+            stats.mean = SIMD3<Float>(Float(sum.x / n), Float(sum.y / n), Float(sum.z / n))
+        }
+        return stats
+    }
+
+    /// `graded` is display-encoded RGBA float, straight from `renderSampled`.
+    static func compute(graded: [Float], width w: Int, height: Int,
+                        stats: Stats) -> Scopes? {
+        let total = w * height
+        guard total > 0, graded.count >= total * 4 else { return nil }
+        let step = 1
 
         let bins = 256
         var hist = [Int](repeating: 0, count: bins * 3)
@@ -61,27 +94,12 @@ struct Scopes {
         var wave = [Float](repeating: 0, count: cw * ph)
         var cieAcc = [Float](repeating: 0, count: CIE.size * CIE.size)
 
-        var stats = Stats()
-        var sum = SIMD3<Double>(repeating: 0)
-
-        let p = image.pixels
-        let w = image.width
-
         var i = 0
         while i < total {
             let o = i * 4
-            let lin = SIMD3<Float>(p[o], p[o + 1], p[o + 2])
-
-            stats.min = simd_min(stats.min, lin)
-            stats.max = simd_max(stats.max, lin)
-            sum += SIMD3<Double>(Double(lin.x), Double(lin.y), Double(lin.z))
-            if lin.x > 1 || lin.y > 1 || lin.z > 1 { stats.aboveOne += 1 }
-            if lin.x >= 1 || lin.y >= 1 || lin.z >= 1 { stats.clippedHigh += 1 }
-            if lin.x <= 0 || lin.y <= 0 || lin.z <= 0 { stats.clippedLow += 1 }
-            stats.sampleCount += 1
-
-            // Display-encoded copy drives all three scopes.
-            let e = SIMD3<Float>(linearToSRGB(lin.x), linearToSRGB(lin.y), linearToSRGB(lin.z))
+            // Already display-encoded by the shader.
+            let e = SIMD3<Float>(graded[o], graded[o + 1], graded[o + 2])
+            let lin = SIMD3<Float>(srgbToLinear(e.x), srgbToLinear(e.y), srgbToLinear(e.z))
 
             for c in 0..<3 {
                 let v = e[c]
@@ -126,11 +144,6 @@ struct Scopes {
             if vx >= 0, vx < vs, vy >= 0, vy < vs { vector[vy * vs + vx] += 1 }
 
             i += step
-        }
-
-        if stats.sampleCount > 0 {
-            let n = Double(stats.sampleCount)
-            stats.mean = SIMD3<Float>(Float(sum.x / n), Float(sum.y / n), Float(sum.z / n))
         }
 
         guard let h = renderHistogram(hist, bins: bins),

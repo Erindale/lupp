@@ -254,24 +254,9 @@ final class Renderer {
                 Float(x1 / vw * 2 - 1),
                 Float(1 - y0 / vh * 2))   // top edge
 
-            var u = Uniforms(rect: rect,
-                             lutDomainMin: lutDomainMin,
-                             lutDomainMax: lutDomainMax,
-                             whiteBalance: SIMD4(display.whiteBalance, 0),
-                             exposure: pow(2, display.exposureEV),
+            var u = uniforms(for: display, rect: rect,
                              checkerSize: Float(12 * backingScale),
-                             lutAmount: display.lutAmount,
-                             contrast: display.contrast,
-                             contrastPivot: display.contrastPivot,
-                             tetraAmount: display.tetraAmount,
-                             showChecker: 1,
-                             viewTransform: UInt32(display.viewTransform.rawValue),
-                             channel: UInt32(display.channel.rawValue),
-                             showClipping: display.showClipping ? 1 : 0,
-                             falseColour: display.falseColour ? 1 : 0,
-                             lutEnabled: lutTexture != nil ? 1 : 0,
-                             tetraEnabled: display.tetraEnabled ? 1 : 0,
-                             encodeOutput: 0)
+                             showChecker: 1, encodeOutput: 0)
             enc.setRenderPipelineState(pipeline)
             var tetra = display.tetra
             enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -321,24 +306,8 @@ final class Renderer {
         guard let cmd = queue.makeCommandBuffer(),
               let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
 
-        var u = Uniforms(rect: SIMD4<Float>(-1, -1, 1, 1),
-                         lutDomainMin: lutDomainMin,
-                         lutDomainMax: lutDomainMax,
-                         whiteBalance: SIMD4(display.whiteBalance, 0),
-                         exposure: pow(2, display.exposureEV),
-                         checkerSize: 1,
-                         lutAmount: display.lutAmount,
-                         contrast: display.contrast,
-                         contrastPivot: display.contrastPivot,
-                         tetraAmount: display.tetraAmount,
-                         showChecker: 0,
-                         viewTransform: UInt32(display.viewTransform.rawValue),
-                         channel: UInt32(display.channel.rawValue),
-                         showClipping: display.showClipping ? 1 : 0,
-                         falseColour: display.falseColour ? 1 : 0,
-                         lutEnabled: lutTexture != nil ? 1 : 0,
-                         tetraEnabled: display.tetraEnabled ? 1 : 0,
-                         encodeOutput: 1)
+        var u = uniforms(for: display, rect: SIMD4<Float>(-1, -1, 1, 1),
+                         checkerSize: 1, showChecker: 0, encodeOutput: 1)
         var tetra = display.tetra
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -364,6 +333,96 @@ final class Renderer {
                             from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
         }
         return Renderer.cgImage(fromHalf: half, width: w, height: h, bitDepth: bitDepth)
+    }
+
+    /// Render the graded image small, for the scopes to measure.
+    ///
+    /// Scopes have to describe what is on screen, not the file — a histogram that
+    /// ignores the grade is worse than no histogram. Rendering through the same
+    /// shader is the only way to guarantee they agree; measuring the source on the
+    /// CPU would be a second implementation of the whole chain, free to drift.
+    ///
+    /// Downsampled because a few hundred thousand samples are statistically
+    /// indistinguishable from millions here, and this runs on every slider tick.
+    /// Returns display-encoded RGBA — what the scopes want — which the CIE plot
+    /// linearises again for itself.
+    func renderSampled(display: DisplayState, maxDimension: Int) -> (data: [Float], width: Int, height: Int)? {
+        guard let source = texture else { return nil }
+        let sw = source.width, sh = source.height
+        guard sw > 0, sh > 0 else { return nil }
+        let k = min(1.0, Double(maxDimension) / Double(max(sw, sh)))
+        let w = max(1, Int((Double(sw) * k).rounded())), h = max(1, Int((Double(sh) * k).rounded()))
+
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: w, height: h, mipmapped: false)
+        desc.usage = [.renderTarget, .shaderRead]
+        let unified = device.hasUnifiedMemory
+        desc.storageMode = unified ? .shared : .managed
+        guard let target = device.makeTexture(descriptor: desc) else { return nil }
+
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+
+        guard let cmd = queue.makeCommandBuffer(),
+              let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+
+        var u = uniforms(for: display, rect: SIMD4<Float>(-1, -1, 1, 1),
+                         checkerSize: 1, showChecker: 0, encodeOutput: 1)
+        var tetra = display.tetra
+        enc.setRenderPipelineState(pipeline)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+        enc.setFragmentBytes(&tetra, length: MemoryLayout<TetraCorners>.stride, index: 1)
+        enc.setFragmentTexture(source, index: 0)
+        enc.setFragmentTexture(lutTexture ?? identityLUT, index: 1)
+        enc.setFragmentSamplerState(linear, index: 0)
+        if let lutSampler { enc.setFragmentSamplerState(lutSampler, index: 1) }
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        enc.endEncoding()
+
+        if !unified, let blit = cmd.makeBlitCommandEncoder() {
+            blit.synchronize(resource: target)
+            blit.endEncoding()
+        }
+        cmd.commit()
+        cmd.waitUntilCompleted()
+
+        var half = [UInt16](repeating: 0, count: w * h * 4)
+        half.withUnsafeMutableBytes { raw in
+            target.getBytes(raw.baseAddress!, bytesPerRow: w * 8,
+                            from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        }
+        var out = [Float](repeating: 0, count: w * h * 4)
+        for i in 0..<out.count { out[i] = Float(Float16(bitPattern: half[i])) }
+        return (out, w, h)
+    }
+
+    /// One place that builds the uniform block, so the screen, the export and the
+    /// scopes cannot quietly disagree about how the image is being rendered.
+    private func uniforms(for display: DisplayState, rect: SIMD4<Float>,
+                          checkerSize: Float, showChecker: UInt32,
+                          encodeOutput: UInt32) -> Uniforms {
+        Uniforms(rect: rect,
+                 lutDomainMin: lutDomainMin,
+                 lutDomainMax: lutDomainMax,
+                 whiteBalance: SIMD4(display.whiteBalance, 0),
+                 exposure: pow(2, display.exposureEV),
+                 checkerSize: checkerSize,
+                 lutAmount: display.lutAmount,
+                 contrast: display.contrast,
+                 contrastPivot: display.contrastPivot,
+                 tetraAmount: display.tetraAmount,
+                 showChecker: showChecker,
+                 viewTransform: UInt32(display.viewTransform.rawValue),
+                 channel: UInt32(display.channel.rawValue),
+                 showClipping: display.showClipping ? 1 : 0,
+                 falseColour: display.falseColour ? 1 : 0,
+                 lutEnabled: lutTexture != nil ? 1 : 0,
+                 tetraEnabled: display.tetraEnabled ? 1 : 0,
+                 encodeOutput: encodeOutput)
     }
 
     private static func cgImage(fromHalf half: [UInt16], width w: Int, height h: Int,

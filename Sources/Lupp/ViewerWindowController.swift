@@ -21,7 +21,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// Bumped on every load so a slow decode that lands after you've arrowed
     /// past it gets dropped instead of overwriting the image you're now on.
     private var loadToken = 0
-    private var scopesToken = 0
+    private var scopesInFlight = false
+    private var scopesPending = false
+    /// Facts about the file, measured once on load — the grade can't change them.
+    private var sourceStats: Scopes.Stats?
     private var hasSizedToImage = false
     private var currentLUTPath: String?
     private var currentPresetName: String?
@@ -208,12 +211,13 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         }
         grade.onLight = { [weak self] ev, wb, contrast, pivot in
             guard let self else { return }
-            self.canvas.display.exposureEV = ev
-            self.canvas.display.whiteBalance = wb
-            self.canvas.display.contrast = contrast
-            self.canvas.display.contrastPivot = pivot
+            var d = self.canvas.display
+            d.exposureEV = ev
+            d.whiteBalance = wb
+            d.contrast = contrast
+            d.contrastPivot = pivot
+            self.canvas.display = d          // one write, one refresh
             self.rememberGrade()
-            self.recomputeScopes()
         }
         grade.onSavePreset = { [weak self] in self?.savePreset() }
         grade.onUsePreset = { [weak self] name in
@@ -384,20 +388,40 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         if scopesOpen { recomputeScopes() }
     }
 
-    /// Whole-image reductions, so they run off the main thread and only while the
-    /// panel is actually open — a closed panel should cost nothing.
+    /// Re-measure the scopes from a fresh graded render.
+    ///
+    /// Coalesced rather than queued: while one pass is in flight another request
+    /// only sets a flag, and at most one more runs when it finishes. Dragging a
+    /// slider fires these continuously, and a queue would fall further behind the
+    /// longer you dragged — this instead always measures the *latest* state and
+    /// simply skips the intermediate ones it couldn't keep up with.
     private func recomputeScopes() {
-        guard scopesOpen, let img = canvas.image else {
+        guard scopesOpen, canvas.image != nil else {
             scopes.update(with: nil, image: nil)
             return
         }
-        scopesToken += 1
-        let token = scopesToken
+        if scopesInFlight { scopesPending = true; return }
+        scopesInFlight = true
+
+        // The render has to happen here: Metal work belongs with the renderer, and
+        // it is sub-millisecond at this size. Only the reduction goes off-thread.
+        guard let sampled = canvas.renderSampled(maxDimension: Scopes.sampleExtent),
+              let stats = sourceStats else {
+            scopesInFlight = false
+            return
+        }
+        let img = canvas.image
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Scopes.compute(from: img)
+            let result = Scopes.compute(graded: sampled.data, width: sampled.width,
+                                        height: sampled.height, stats: stats)
             DispatchQueue.main.async {
-                guard let self, self.scopesToken == token else { return }
+                guard let self else { return }
                 self.scopes.update(with: result, image: img)
+                self.scopesInFlight = false
+                if self.scopesPending {
+                    self.scopesPending = false
+                    self.recomputeScopes()
+                }
             }
         }
     }
@@ -428,6 +452,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
                 case .success(let img):
                     self.present(img)
                 case .failure(let err):
+                    self.sourceStats = nil
                     self.canvas.show(nil)
                     self.scopes.update(with: nil, image: nil)
                     self.window?.subtitle = err.localizedDescription
@@ -441,6 +466,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             hasSizedToImage = true
             sizeWindow(to: img)
         }
+        sourceStats = Scopes.sourceStats(from: img)
         canvas.show(img)
         // Colour space comes from the file; the view transform is chosen from what
         // kind of file it is, because no file records one.
@@ -481,6 +507,21 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     func canvasDisplayChanged(_ c: ImageCanvasView) {
         syncPanelControls()
+        // Every change to how the image is rendered invalidates the scopes, so
+        // there is one hook rather than a call beside each control.
+        recomputeScopes()
+    }
+
+    /// The backdrop is one colour for the whole window, so a change to it has to
+    /// reach the chrome as well as the canvas.
+    func canvasDidChangeBackground(_ c: ImageCanvasView) {
+        window?.backgroundColor = Theme.background
+        window?.contentView?.layer?.backgroundColor = Theme.background.cgColor
+        for p in [scopes, grade] as [NSView] {
+            p.layer?.backgroundColor = Theme.background.cgColor
+        }
+        readout.refreshBackground()
+        canvasReadoutChanged(c)
     }
 
     /// A dropped file replaces what this window is showing; extra files beyond
@@ -504,25 +545,22 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     @objc func exportImage(_ sender: Any?) {
         guard let img = canvas.image else { NSSound.beep(); return }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png, .tiff, .jpeg]
+        let initial = ExportFormatAccessory.Format.from(
+            extension: Preferences.lastExportExtension)
         panel.nameFieldStringValue =
-            img.url.deletingPathExtension().lastPathComponent + "-lupp.png"
-        panel.message = "Export the image as displayed — view transform, LUT, grade and exposure baked in."
+            img.url.deletingPathExtension().lastPathComponent + "-lupp." + initial.ext
+        panel.message = "Export the image as displayed — view transform, grade, LUT and exposure baked in."
+        let accessory = ExportFormatAccessory(panel: panel, initial: initial)
+        panel.accessoryView = accessory
+
         guard panel.runModal() == .OK, let out = panel.url else { return }
+        // Whatever the field ends up saying wins, in case it was typed by hand.
+        let format = ExportFormatAccessory.Format.from(extension: out.pathExtension)
+        Preferences.lastExportExtension = format.ext
 
-        let ext = out.pathExtension.lowercased()
-        // 16 bits for TIFF, where the extra depth is the reason to choose it;
-        // 8 for PNG and JPEG, where it mostly just doubles the file.
-        let bits = (ext == "tif" || ext == "tiff") ? 16 : 8
-        let type: String
-        switch ext {
-        case "tif", "tiff": type = UTType.tiff.identifier
-        case "jpg", "jpeg": type = UTType.jpeg.identifier
-        default:            type = UTType.png.identifier
-        }
-
-        guard let cg = canvas.exportImage(bitDepth: bits),
-              let dest = CGImageDestinationCreateWithURL(out as CFURL, type as CFString, 1, nil)
+        guard let cg = canvas.exportImage(bitDepth: format.bitDepth),
+              let dest = CGImageDestinationCreateWithURL(
+                  out as CFURL, format.type.identifier as CFString, 1, nil)
         else {
             let a = NSAlert()
             a.messageText = "Couldn’t export"
@@ -531,7 +569,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             return
         }
         var props: [CFString: Any] = [:]
-        if type == UTType.jpeg.identifier { props[kCGImageDestinationLossyCompressionQuality] = 0.95 }
+        if format == .jpeg { props[kCGImageDestinationLossyCompressionQuality] = 0.95 }
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
         if !CGImageDestinationFinalize(dest) {
             let a = NSAlert()

@@ -72,6 +72,13 @@ final class FloatImage {
     }
 }
 
+/// sRGB -> linear, for turning the shader's encoded output back into
+/// tristimulus values the CIE scope can use.
+func srgbToLinear(_ c: Float) -> Float {
+    let v = min(max(c, 0), 1)
+    return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+}
+
 /// Linear -> sRGB display encoding, for the hex/8-bit half of the readout.
 /// Values outside 0...1 are clamped here *only*; the float readout beside it
 /// still shows what the file actually contains.

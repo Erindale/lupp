@@ -31,6 +31,9 @@ about what's in the file — including the parts above diffuse white.
 - **Two side panels**, toggled independently from the title bar and usable side
   by side. The **inspector** reports on the image; the **colour** panel changes
   it. Nothing in the inspector touches a pixel.
+- **Scopes measure the graded image, live.** They're computed from a small render
+  through the same shader as the canvas, so they always agree with the picture and
+  update as you drag a slider.
 - **Inspector** (⌥⌘I) — histogram, waveform (RGB parade, combined, or luma),
   vectorscope with a BT.709 graticule and skin-tone line, and a CIE 1931 xy plot
   with the spectral locus and Rec.709 / P3 / Rec.2020 gamut triangles. Plus
@@ -186,6 +189,7 @@ first window you ever open sizes itself to the image.
 | `E` / `⇧E` / `R` | Exposure up / down / reset |
 | ⌥⌘I | Show / hide the inspector panel |
 | ⇧⌘E | Export as displayed |
+| Right-drag on the image | Lighten / darken the backdrop |
 | 1–6 | RGB / R / G / B / A / Luma |
 | `C` / `F` | Clipping overlay / false colour |
 

@@ -43,8 +43,12 @@ class SidePanel: NSView {
         scroll.hasVerticalScroller = true
         // Nothing in a panel is ever wider than the panel, so sideways motion can
         // only ever be an accident — a trackpad swipe with a little drift in it.
+        // The flags alone are not enough: the document view can still end up a
+        // scroller's width wider than the clip view and drift by exactly that, so
+        // the clip view pins its own origin.
         scroll.hasHorizontalScroller = false
         scroll.horizontalScrollElasticity = .none
+        scroll.contentView = VerticalOnlyClipView()
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         scroll.verticalScroller = OverlayScroller()
@@ -64,7 +68,9 @@ class SidePanel: NSView {
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            doc.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            // Against the clip view, not the scroll view: they differ by the
+            // scroller's width unless overlay scrollers are in play everywhere.
+            doc.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
             stack.topAnchor.constraint(equalTo: doc.topAnchor),
             stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
@@ -126,4 +132,13 @@ class SidePanel: NSView {
 
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
+}
+
+/// A clip view that refuses to move sideways, whatever it is asked.
+final class VerticalOnlyClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var r = super.constrainBoundsRect(proposedBounds)
+        r.origin.x = 0
+        return r
+    }
 }
