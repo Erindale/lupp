@@ -24,7 +24,7 @@ final class ScopesPanel: SidePanel {
                                         accessory: paradeMode)
     private let vectorscope = VectorscopeView(title: "Vectorscope", heightRatio: 1)
     private let cie = CIEView(title: "CIE 1931 xy", heightRatio: 1)
-    private let stats = NSTextField(labelWithString: "")
+    private let stats = ThemedLabel("", role: .secondary, size: 10, monospaced: true)
 
     private let transformPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private lazy var transformNote = caption()
@@ -51,7 +51,7 @@ final class ScopesPanel: SidePanel {
         paradeMode.selectedSegment = min(2, max(0, Preferences.paradeMode))
         paradeMode.target = self
         paradeMode.action = #selector(paradeModeChanged(_:))
-        paradeMode.selectedSegmentBezelColor = NSColor(white: 0.42, alpha: 1)
+        paradeMode.selectedSegmentBezelColor = Theme.controlFill
 
         style(transformPopup)
         transformPopup.target = self
@@ -61,8 +61,6 @@ final class ScopesPanel: SidePanel {
             transformPopup.lastItem?.tag = t.rawValue
         }
 
-        stats.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        stats.textColor = .secondaryLabelColor
         stats.lineBreakMode = .byWordWrapping
         stats.maximumNumberOfLines = 0
 
@@ -186,10 +184,8 @@ class ScopeView: NSView {
 
     init(title: String, heightRatio: CGFloat, accessory: NSView? = nil) {
         self.heightRatio = heightRatio
-        label = NSTextField(labelWithString: title.uppercased())
+        label = ThemedLabel(title.uppercased(), role: .tertiary, size: 9, weight: .semibold)
         super.init(frame: .zero)
-        label.font = .systemFont(ofSize: 9, weight: .semibold)
-        label.textColor = .tertiaryLabelColor
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         translatesAutoresizingMaskIntoConstraints = false
@@ -230,7 +226,7 @@ class ScopeView: NSView {
             ctx.restoreGState()
         }
 
-        NSColor.white.withAlphaComponent(0.06).setStroke()
+        Theme.separator.withAlphaComponent(0.5).setStroke()
         path.lineWidth = 1
         path.stroke()
         drawOverlay(in: r, ctx: ctx)

@@ -29,14 +29,10 @@ class SidePanel: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     /// Repaint after the backdrop changes. The layer colour is not enough: the
-    /// scope views draw their own plates and have to be asked again.
+    /// scope views draw their own plates and every label re-derives its colour.
     func refreshBackground() {
         layer?.backgroundColor = Theme.background.cgColor
-        func mark(_ v: NSView) {
-            v.needsDisplay = true
-            for sub in v.subviews { mark(sub) }
-        }
-        mark(self)
+        ThemeRefresh.apply(to: self)
     }
 
     /// Wraps a column of views in a scroll view with Flöt-style overlay bars, and
@@ -117,7 +113,7 @@ class SidePanel: NSView {
         button.imagePosition = .imageOnly
         button.isBordered = false
         button.bezelStyle = .texturedRounded
-        button.contentTintColor = .tertiaryLabelColor
+        button.contentTintColor = Theme.text(.tertiary)
         button.toolTip = "Reset \(t.lowercased()) to defaults"
 
         for v in [label, button] as [NSView] {
@@ -153,7 +149,7 @@ class SidePanel: NSView {
         c.segmentStyle = .rounded
         c.controlSize = size
         c.font = .systemFont(ofSize: font)
-        c.selectedSegmentBezelColor = NSColor(white: 0.44, alpha: 1)
+        c.selectedSegmentBezelColor = Theme.controlFill
         c.translatesAutoresizingMaskIntoConstraints = false
     }
 
@@ -164,7 +160,7 @@ class SidePanel: NSView {
 
     func style(_ s: NSSlider) {
         s.controlSize = .small
-        s.trackFillColor = NSColor(white: 0.52, alpha: 1)
+        s.trackFillColor = Theme.controlFill
     }
 
     func separator() -> NSView {
@@ -191,6 +187,48 @@ final class ActionButton: NSButton {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     @objc private func fire() { handler() }
+}
+
+/// A label that remembers which text role it plays, so the backdrop can be
+/// changed at any time and every piece of text re-derives its own colour.
+///
+/// Explicit roles rather than AppKit's semantic colours, because those only know
+/// about light and dark mode — they cannot follow a backdrop that moves
+/// continuously.
+final class ThemedLabel: NSTextField {
+    let role: Theme.TextRole
+
+    init(_ text: String, role: Theme.TextRole, size: CGFloat, weight: NSFont.Weight = .regular,
+         monospaced: Bool = false) {
+        self.role = role
+        super.init(frame: .zero)
+        stringValue = text
+        font = monospaced ? .monospacedSystemFont(ofSize: size, weight: weight)
+                          : .systemFont(ofSize: size, weight: weight)
+        isEditable = false
+        isBordered = false
+        isSelectable = false
+        drawsBackground = false
+        applyTheme()
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func applyTheme() { textColor = Theme.text(role) }
+}
+
+/// Re-derives every themed colour under a view. One walk rather than each panel
+/// keeping its own list, so a control added later cannot be forgotten.
+enum ThemeRefresh {
+    static func apply(to view: NSView) {
+        if let l = view as? ThemedLabel { l.applyTheme() }
+        if let s = view as? NSSlider { s.trackFillColor = Theme.controlFill }
+        if let c = view as? NSSegmentedControl { c.selectedSegmentBezelColor = Theme.controlFill }
+        if let b = view as? NSBox, b.boxType == .separator { b.borderColor = Theme.separator }
+        if let b = view as? ActionButton { b.contentTintColor = Theme.text(.tertiary) }
+        view.needsDisplay = true
+        for sub in view.subviews { apply(to: sub) }
+    }
 }
 
 final class FlippedView: NSView {

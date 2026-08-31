@@ -41,21 +41,27 @@ final class ReadoutBar: NSView {
 
     func refreshBackground() {
         layer?.backgroundColor = Theme.background.cgColor
-        needsDisplay = true
-        for v in subviews { v.needsDisplay = true }
+        ThemeRefresh.apply(to: self)
     }
 
     private static func label(alignment: NSTextAlignment) -> NSTextField {
-        let f = NSTextField(labelWithString: "")
-        f.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        f.textColor = .secondaryLabelColor
+        let f = ThemedLabel("", role: .secondary, size: 11, monospaced: true)
         f.alignment = alignment
         f.lineBreakMode = .byTruncatingMiddle
         return f
     }
 
     func update(pixel: (x: Int, y: Int)?, value: SIMD4<Float>?,
-                zoomPercent: Double, exposureEV: Float, downsampled: Bool) {
+                zoomPercent: Double, exposureEV: Float, downsampled: Bool,
+                backdrop: CGFloat? = nil) {
+        if let backdrop {
+            // While the backdrop is being dragged it takes over the readout, so
+            // the gesture isn't blind.
+            left.stringValue = String(format: "backdrop  %.0f%%", backdrop * 100)
+            swatch.color = Theme.background
+            right.stringValue = String(format: "%.0f%%", zoomPercent)
+            return
+        }
         if let p = pixel, let v = value {
             let hex = String(format: "#%02X%02X%02X",
                              Int((linearToSRGB(v.x) * 255).rounded()),
@@ -89,7 +95,7 @@ private final class SwatchView: NSView {
                                 xRadius: 2.5, yRadius: 2.5)
         (color ?? NSColor.clear).setFill()
         path.fill()
-        NSColor.separatorColor.setStroke()
+        Theme.separator.setStroke()
         path.lineWidth = 1
         path.stroke()
     }

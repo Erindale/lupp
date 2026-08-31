@@ -24,7 +24,7 @@ final class GradePanel: SidePanel {
     private let lutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let lutButtons = NSSegmentedControl(labels: ["Add…", "Remove", "Off"],
                                                 trackingMode: .momentary, target: nil, action: nil)
-    private let lutLabel = NSTextField(labelWithString: "No LUT")
+    private let lutLabel = ThemedLabel("No LUT", role: .tertiary, size: 9)
     private let lutSlider = NSSlider(value: 100, minValue: 0, maxValue: 100,
                                      target: nil, action: nil)
 
@@ -62,8 +62,6 @@ final class GradePanel: SidePanel {
         lutSlider.target = self
         lutSlider.action = #selector(lutAmountChanged(_:))
         lutSlider.isEnabled = false
-        lutLabel.font = .systemFont(ofSize: 9)
-        lutLabel.textColor = .tertiaryLabelColor
         lutLabel.lineBreakMode = .byTruncatingMiddle
 
         let lightRows = [exposureRow, contrastRow, pivotRow]

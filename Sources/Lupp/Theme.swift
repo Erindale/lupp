@@ -1,51 +1,98 @@
 import AppKit
 import Foundation
 
-/// One background colour for the entire window.
+/// Every colour in the window, derived from one number.
 ///
-/// Authored in sRGB, because that is the space the chrome is designed in, and
-/// converted to linear for the Metal drawable — which renders into an extended
-/// *linear* space. Handing the same number to both would make the canvas
-/// visibly lighter than the title bar it is meant to be continuous with.
+/// The backdrop is adjustable (right-drag on the canvas) because the right
+/// surround depends on the image — a bright one makes a dark frame look washed
+/// out. Everything else is computed from it rather than being a fixed palette,
+/// so the whole app moves together instead of the canvas drifting away from its
+/// own chrome.
+///
+/// Authored in sRGB, since that is the space the chrome is designed in, and
+/// converted to linear for the Metal drawable, which renders into an extended
+/// *linear* space. Handing the same number to both would make the canvas visibly
+/// lighter than the title bar it is meant to be continuous with.
 enum Theme {
     static let defaultBackgroundSRGB: CGFloat = 0.26
 
-    /// Adjustable, because the right backdrop depends on the image: a bright
-    /// surround makes a dark frame look washed out, and vice versa. Right-drag on
-    /// the canvas changes it.
     static var backgroundSRGB: CGFloat {
         get { Preferences.backgroundLevel }
-        set { Preferences.backgroundLevel = min(max(newValue, 0.02), 0.92) }
+        set { Preferences.backgroundLevel = min(max(newValue, 0.02), 0.96) }
     }
 
-    /// Past this the backdrop is light enough that white text stops being
-    /// readable on it, so the whole window flips to the light appearance and
-    /// AppKit's semantic colours invert with it — labels, controls and all.
-    static var isLightBackground: Bool { backgroundSRGB > 0.5 }
-
-    static var appearance: NSAppearance? {
-        NSAppearance(named: isLightBackground ? .aqua : .darkAqua)
-    }
-
-    /// Scope plates stay dark whatever the surround, as they do in every grading
-    /// tool — the traces are drawn light, and a plot that inverted with the chrome
-    /// would make them vanish.
-    static var scopeTrackTint: NSColor {
-        NSColor(white: isLightBackground ? 0.3 : 0.72, alpha: 1)
-    }
-
-    static var background: NSColor {
-        NSColor(srgbRed: backgroundSRGB, green: backgroundSRGB, blue: backgroundSRGB, alpha: 1)
-    }
+    static var background: NSColor { grey(backgroundSRGB) }
 
     static var backgroundLinear: Double {
         let v = Double(backgroundSRGB)
         return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
     }
 
-    /// Scope panels sit a touch darker so the traces read against them.
+    /// Whether text has to be dark to be read. Only the *polarity* switches here;
+    /// the shades themselves ramp continuously on either side of it, so moving the
+    /// backdrop looks like a dimmer rather than a series of steps.
+    static var isLightBackground: Bool { backgroundSRGB > 0.5 }
+
+    // MARK: - Text
+
+    enum TextRole { case primary, secondary, tertiary }
+
+    /// Text tracks the backdrop continuously within each polarity, pushed hardest
+    /// toward the extremes as the backdrop nears mid grey — which is exactly where
+    /// contrast is scarcest — and eased off at the ends, where there is plenty and
+    /// pure white on near-black would only glare.
+    ///
+    /// One polarity switch is unavoidable: no continuous path from white to black
+    /// avoids passing through mid grey, which against a mid-grey backdrop is
+    /// illegible. So the crossover sits at 0.5, where both options are at their
+    /// most readable and the change is least visible.
+    static func text(_ role: TextRole) -> NSColor {
+        let L = backgroundSRGB
+        let base: CGFloat = isLightBackground ? (L - 0.5) * 0.5 : 1 - (0.5 - L) * 0.5
+        let fade: CGFloat
+        switch role {
+        case .primary:   fade = 0
+        case .secondary: fade = 0.22
+        case .tertiary:  fade = 0.36
+        }
+        return grey(base + (L - base) * fade)
+    }
+
+    static var separator: NSColor {
+        let L = backgroundSRGB
+        return grey(isLightBackground ? max(0, L - 0.12) : min(1, L + 0.12))
+    }
+
+    // MARK: - Surfaces
+
+    /// Scope plates follow the backdrop but stay in the lower part of the range.
+    ///
+    /// They carry light traces, and a plate light enough to match a pale surround
+    /// would erase them. Tracking proportionally keeps the panel feeling of a
+    /// piece while guaranteeing the scopes stay readable at any setting.
     static var scopeBackground: NSColor {
-        NSColor(srgbRed: 0.13, green: 0.13, blue: 0.13, alpha: 1)
+        grey(min(max(backgroundSRGB * 0.5, 0.03), 0.30))
+    }
+
+    /// Slider tracks and other filled control furniture.
+    static var controlFill: NSColor {
+        let L = backgroundSRGB
+        return grey(isLightBackground ? max(0, L - 0.30) : min(1, L + 0.26))
+    }
+
+    /// Marks drawn straight onto the backdrop, such as the scrollbar pill.
+    static var overlayMark: NSColor { isLightBackground ? .black : .white }
+
+    /// Controls have no continuum in AppKit — a segmented control is either the
+    /// light or the dark rendering, never between — so this is the one place a
+    /// hard switch remains, and it is confined to control chrome.
+    static var appearance: NSAppearance? {
+        NSAppearance(named: isLightBackground ? .aqua : .darkAqua)
+    }
+
+    private static func grey(_ v: CGFloat) -> NSColor {
+        let c = min(max(v, 0), 1)
+        return NSColor(srgbRed: c, green: c, blue: c, alpha: 1)
     }
 
     static let panelWidth: CGFloat = 320

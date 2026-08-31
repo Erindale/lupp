@@ -191,10 +191,27 @@ first window you ever open sizes itself to the image.
 | ⇧⌘E | Export as displayed |
 | Right-drag on the image | Lighten / darken the backdrop |
 
-The backdrop is one colour for the whole window, and past the point where white
-text stops reading on it the window flips to the light appearance — labels,
-controls and the scrollbar pill invert with it. Scope plates stay dark whatever
-the surround, as they do in every grading tool, so the traces never vanish.
+**Every colour in the window is derived from one number.** The backdrop is
+adjustable because the right surround depends on the image — a bright one makes a
+dark frame look washed out — and the canvas, title bar, both panels, the footer,
+every label, the slider tracks and the scrollbar pill all recompute from it, so
+the whole app moves together rather than the canvas drifting away from its chrome.
+
+Text ramps continuously within each polarity, pushed hardest toward the extremes
+as the backdrop nears mid grey — where contrast is scarcest — and eased off at the
+ends, where there is plenty and pure white would only glare. Primary text never
+drops below about 4:1 anywhere in the range.
+
+Two things are deliberately not continuous. Text polarity has to switch once: no
+continuous path from white to black avoids passing through mid grey, which against
+a mid-grey backdrop is illegible, so the crossover sits at 0.5 where both options
+are at their most readable. And AppKit control chrome has no continuum — a
+segmented control is either its light or its dark rendering — so that switches
+with it.
+
+Scope plates track the backdrop but stay in the lower part of the range: they
+carry light traces, and a plate pale enough to match a bright surround would erase
+them.
 | 1–6 | RGB / R / G / B / A / Luma |
 | `C` / `F` | Clipping overlay / false colour |
 

@@ -42,16 +42,14 @@ class LabelledSliderRow: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        let name = NSTextField(labelWithString: label)
-        name.font = .systemFont(ofSize: 10)
-        name.textColor = .secondaryLabelColor
+        let name = ThemedLabel(label, role: .secondary, size: 10)
         name.alignment = .right
         name.lineBreakMode = .byTruncatingTail
 
         slider.minValue = Double(initial) - span
         slider.maxValue = Double(initial) + span
         slider.controlSize = .small
-        slider.trackFillColor = NSColor(white: 0.52, alpha: 1)
+        slider.trackFillColor = Theme.controlFill
         slider.target = self
         slider.action = #selector(sliderMoved)
         slider.isContinuous = true

@@ -72,6 +72,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             window.setFrameOrigin(NSPoint(x: last.minX + 24, y: last.minY - 24))
         }
         applyPanelVisibility(animated: false)
+        // The backdrop is a stored preference, so a new window has to adopt it
+        // rather than starting at whatever the defaults happened to be.
+        applyBackgroundEverywhere()
         // Reload the LUT you were last using, so it survives a relaunch. This has
         // to precede refreshLibrary(), or the popup is built from a library that
         // hasn't been repopulated yet and shows None over a loaded LUT.
@@ -367,7 +370,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private func applyPanelVisibility(animated: Bool) {
         // Grey when closed, full strength when open — the accent colour read as
         // an alert rather than as a state, which is not what a view toggle says.
-        scopesButton.contentTintColor = scopesOpen ? .labelColor : .secondaryLabelColor
+        scopesButton.contentTintColor = scopesOpen ? Theme.text(.primary) : Theme.text(.tertiary)
         gradeButton.image = Theme.gradeIcon(active: gradeOpen)
 
         let scopesTarget: CGFloat = scopesOpen ? 0 : Theme.panelWidth
@@ -502,7 +505,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     func canvasReadoutChanged(_ c: ImageCanvasView) {
         readout.update(pixel: c.cursorPixel, value: c.cursorValue,
                        zoomPercent: c.zoomPercent, exposureEV: c.exposureEV,
-                       downsampled: c.isDownsampledView)
+                       downsampled: c.isDownsampledView,
+                       backdrop: c.isAdjustingBackground ? Theme.backgroundSRGB : nil)
     }
 
     func canvasDisplayChanged(_ c: ImageCanvasView) {
@@ -519,16 +523,21 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         canvasReadoutChanged(c)
     }
 
-    /// One backdrop for the whole window, so a change to it has to reach the
-    /// chrome, both panels and the footer — and, past the point where white text
-    /// stops reading on it, the window's appearance too.
+    /// One backdrop for the whole window: the chrome, both panels, the footer and
+    /// every label re-derive from the same number, so nothing is left behind at a
+    /// colour that no longer matches.
     private func applyBackgroundEverywhere() {
+        // Control chrome is the one thing AppKit gives no continuum for — a
+        // segmented control is either its light or its dark rendering — so this
+        // stays a switch, confined to controls.
         window?.appearance = Theme.appearance
         window?.backgroundColor = Theme.background
         window?.contentView?.layer?.backgroundColor = Theme.background.cgColor
         scopes.refreshBackground()
         grade.refreshBackground()
         readout.refreshBackground()
+        gradeButton.image = Theme.gradeIcon(active: gradeOpen)
+        scopesButton.contentTintColor = scopesOpen ? Theme.text(.primary) : Theme.text(.tertiary)
     }
 
     /// A dropped file replaces what this window is showing; extra files beyond
