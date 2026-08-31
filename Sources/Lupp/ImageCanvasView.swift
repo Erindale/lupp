@@ -229,6 +229,23 @@ final class ImageCanvasView: MTKView {
         canvasDelegate?.canvasReadoutChanged(self)
     }
 
+    /// Swap the pixels without disturbing how they are being shown.
+    ///
+    /// Turning an image is a correction to how the file was read, not an edit,
+    /// so the grade you have built survives it — unlike `show`, which is for
+    /// arriving at a new picture. The fit is redone because the aspect has
+    /// changed and the old zoom would leave you looking at the wrong part.
+    func replaceImage(_ img: FloatImage) {
+        image = img
+        renderer?.upload(img)
+        needsInitialFit = true
+        applyInitialFitIfNeeded()
+        cursorPixel = nil
+        cursorValue = nil
+        needsDisplay = true
+        canvasDelegate?.canvasReadoutChanged(self)
+    }
+
     /// The size the viewport works in: the crop once it has been applied,
     /// otherwise the whole image. Zoom, fit and the readout all follow from this,
     /// so applying a crop makes the app treat it as the picture.

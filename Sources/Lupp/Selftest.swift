@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
+import simd
 import UniformTypeIdentifiers
 
 /// `Lupp --selftest` — checks the parts where being wrong is silent.
@@ -20,6 +21,7 @@ enum Selftest {
 
         srgbLinearizes(in: dir)
         storagePathIsChosenWell(in: dir)
+        manualRotation(in: dir)
         hdrSurvivesDecode(in: dir)
         exifOrientationApplied(in: dir)
         alphaIsStraight(in: dir)
@@ -94,6 +96,58 @@ enum Selftest {
             } else {
                 check("an image with alpha stays float", false, detail: "took the byte path")
             }
+        }
+    }
+
+    /// Turning an image by hand, for files that are wrong about which way up
+    /// they are. Both storage kinds, both directions, and back to where it
+    /// started — a rotation that loses a pixel or turns the wrong way is the
+    /// easy mistake, and it would be silently wrong rather than obviously so.
+    private static func manualRotation(in dir: URL) {
+        // 2 wide x 1 tall: red on the left, black on the right.
+        let url = dir.appendingPathComponent("turn.png")
+        guard writeOpaqueSRGB([255, 0, 0, 255,  0, 0, 0, 255], width: 2, height: 1, to: url),
+              let img = try? ImageLoader.load(url: url) else {
+            return fail("rotation", "could not round-trip")
+        }
+
+        // Clockwise: the left-hand pixel goes to the top.
+        guard let cw = ImageLoader.rotated(img, clockwise: true) else {
+            return fail("rotation", "clockwise turn failed")
+        }
+        check("a clockwise turn swaps the dimensions",
+              cw.width == 1 && cw.height == 2 && cw.fullWidth == 1 && cw.fullHeight == 2,
+              detail: "got \(cw.width)×\(cw.height)")
+        check("a clockwise turn puts the left pixel on top",
+              (cw.sample(x: 0, y: 0)?.x ?? 0) > 0.9 && (cw.sample(x: 0, y: 1)?.x ?? 1) < 0.1,
+              detail: String(format: "top %.2f, bottom %.2f",
+                             cw.sample(x: 0, y: 0)?.x ?? -1, cw.sample(x: 0, y: 1)?.x ?? -1))
+
+        // And back again, which must land exactly where it started.
+        guard let back = ImageLoader.rotated(cw, clockwise: false) else {
+            return fail("rotation", "anticlockwise turn failed")
+        }
+        let same = (0..<(img.width * img.height)).allSatisfy {
+            simd_length(back.linearRGB(atPixel: $0) - img.linearRGB(atPixel: $0)) < 0.001
+        }
+        check("turning back returns the original pixels",
+              same && back.width == img.width && back.height == img.height,
+              detail: "got \(back.width)×\(back.height)")
+
+        // The float path has its own vImage entry point, so it needs its own proof.
+        let exr = dir.appendingPathComponent("turn.exr")
+        if writeFloat([4.0, 0, 0, 1,  0, 0, 0, 1], width: 2, height: 1, to: exr,
+                      type: "com.ilm.openexr-image"),
+           let f = try? ImageLoader.load(url: exr),
+           case .linearFloat = f.storage,
+           let fcw = ImageLoader.rotated(f, clockwise: true) {
+            check("a float image turns too, keeping values above 1.0",
+                  fcw.width == 1 && fcw.height == 2
+                      && near(fcw.sample(x: 0, y: 0)?.x ?? 0, 4.0, tol: 0.01),
+                  detail: String(format: "%dx%d, top %.2f", fcw.width, fcw.height,
+                                 fcw.sample(x: 0, y: 0)?.x ?? -1))
+        } else {
+            fail("rotation", "could not turn a float image")
         }
     }
 

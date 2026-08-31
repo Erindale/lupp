@@ -540,6 +540,39 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         }
     }
 
+    // MARK: - Turning a picture the right way up
+
+    @objc func rotateImageLeft(_ sender: Any?)  { rotateImage(clockwise: false) }
+    @objc func rotateImageRight(_ sender: Any?) { rotateImage(clockwise: true) }
+
+    /// For a file that is simply wrong about which way up it is.
+    ///
+    /// The rotation replaces the cached copy, so it holds while you look at
+    /// other pictures and come back, but it is never written to disk — the
+    /// source file is not ours to correct. A crop is dropped, because its
+    /// coordinates described a frame that no longer exists; the grade is kept,
+    /// because turning a picture is not an edit to it.
+    private func rotateImage(clockwise: Bool) {
+        guard let img = canvas.image else { NSSound.beep(); return }
+        guard let turned = ImageLoader.rotated(img, clockwise: clockwise) else {
+            NSSound.beep(); return
+        }
+        if canvas.display.cropEnabled || canvas.display.cropApplied {
+            var d = canvas.display
+            d.cropEnabled = false
+            d.cropApplied = false
+            d.crop = SIMD4(0, 0, 1, 1)
+            canvas.display = d
+            canvas.cropAspect = nil
+        }
+        ImageStore.shared.replace(turned, for: turned.url)
+        sourceStats = turned.sourceStats
+        canvas.replaceImage(turned)
+        scopes.update(with: nil, image: turned)
+        recomputeScopes()
+        window?.subtitle = subtitleForCurrent()
+    }
+
     /// Decode what you are most likely to ask for next.
     ///
     /// Weighted in the direction you are already travelling — two ahead, one

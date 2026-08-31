@@ -114,6 +114,61 @@ enum ImageLoader {
         return image.colorSpace?.name == CGColorSpace.sRGB
     }
 
+    // MARK: - Turning an image after the fact
+
+    /// Turn a decoded image a quarter turn.
+    ///
+    /// For the times a file is simply wrong about which way up it is — no EXIF
+    /// tag, or a tag nothing honoured when it was written. This works on the
+    /// decoded pixels rather than re-reading the file, so it costs a buffer and
+    /// about 30ms instead of another trip to the disk, and it never writes to
+    /// the original.
+    static func rotated(_ image: FloatImage, clockwise: Bool) -> FloatImage? {
+        let w = image.width, h = image.height
+        let ow = h, oh = w                      // a quarter turn always swaps the axes
+        let turn = UInt8(clockwise ? kRotate90DegreesClockwise : kRotate90DegreesCounterClockwise)
+        let bytes = ow * oh * image.storage.bytesPerPixel
+        guard let outRaw = PixelBuffer.allocate(bytes) else { return nil }
+
+        var err = kvImageNoError
+        switch image.storage {
+        case .srgbBytes(let p):
+            var src = vImage_Buffer(data: p, height: vImagePixelCount(h),
+                                    width: vImagePixelCount(w), rowBytes: w * 4)
+            var dst = vImage_Buffer(data: outRaw, height: vImagePixelCount(oh),
+                                    width: vImagePixelCount(ow), rowBytes: ow * 4)
+            var background: [UInt8] = [0, 0, 0, 0]
+            err = vImageRotate90_ARGB8888(&src, &dst, turn, &background,
+                                          vImage_Flags(kvImageNoFlags))
+        case .linearFloat(let p):
+            var src = vImage_Buffer(data: p, height: vImagePixelCount(h),
+                                    width: vImagePixelCount(w), rowBytes: w * 16)
+            var dst = vImage_Buffer(data: outRaw, height: vImagePixelCount(oh),
+                                    width: vImagePixelCount(ow), rowBytes: ow * 16)
+            var background: [Float] = [0, 0, 0, 0]
+            err = vImageRotate90_ARGBFFFF(&src, &dst, turn, &background,
+                                          vImage_Flags(kvImageNoFlags))
+        }
+        guard err == kvImageNoError else {
+            PixelBuffer.free(outRaw, bytes)
+            return nil
+        }
+
+        let storage: PixelStore = {
+            switch image.storage {
+            case .srgbBytes:   return .srgbBytes(outRaw.bindMemory(to: UInt8.self, capacity: bytes))
+            case .linearFloat: return .linearFloat(outRaw.bindMemory(to: Float.self,
+                                                                    capacity: ow * oh * 4))
+            }
+        }()
+        return FloatImage(
+            width: ow, height: oh, storage: storage,
+            url: image.url, typeIdentifier: image.typeIdentifier,
+            sourceBitDepth: image.sourceBitDepth, sourceColorSpace: image.sourceColorSpace,
+            fullWidth: image.fullHeight, fullHeight: image.fullWidth,
+            wasDownsampled: image.wasDownsampled, maxComponent: image.maxComponent)
+    }
+
     // MARK: - Rasterization
 
     private struct Raster {

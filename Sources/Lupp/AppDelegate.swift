@@ -218,6 +218,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        keyEquivalent: String(UnicodeScalar(NSHomeFunctionKey)!))
         zoomFit.keyEquivalentModifierMask = []
         viewMenu.addItem(.separator())
+        // A correction to how the file was read, not an edit — nothing is
+        // written back to the image.
+        let rotL = viewMenu.addItem(withTitle: "Rotate Anticlockwise",
+                                    action: #selector(ViewerWindowController.rotateImageLeft(_:)),
+                                    keyEquivalent: "[")
+        rotL.keyEquivalentModifierMask = [.command]
+        let rotR = viewMenu.addItem(withTitle: "Rotate Clockwise",
+                                    action: #selector(ViewerWindowController.rotateImageRight(_:)),
+                                    keyEquivalent: "]")
+        rotR.keyEquivalentModifierMask = [.command]
+        viewMenu.addItem(.separator())
         let next = viewMenu.addItem(withTitle: "Next Image", action: #selector(ViewerWindowController.nextImage(_:)), keyEquivalent: String(UnicodeScalar(NSRightArrowFunctionKey)!))
         next.keyEquivalentModifierMask = [.command]
         let prev = viewMenu.addItem(withTitle: "Previous Image", action: #selector(ViewerWindowController.previousImage(_:)), keyEquivalent: String(UnicodeScalar(NSLeftArrowFunctionKey)!))

@@ -126,6 +126,22 @@ final class ImageStore {
         }
     }
 
+    /// Swap what is held for a file, keeping its place in the queue.
+    ///
+    /// Used when an image is turned the right way up: the correction should
+    /// survive walking away and coming back, without being written to the file
+    /// itself. It lasts as long as the session and no longer.
+    func replace(_ image: FloatImage, for url: URL) {
+        guard let key = Key(url) else { return }
+        lock.lock()
+        if let old = entries.removeValue(forKey: key) {
+            bytes -= old.bytesUsed
+            order.removeAll { $0 == key }
+        }
+        lock.unlock()
+        insert(image, for: url)
+    }
+
     /// Drop everything. Used when the window closes, so a session's worth of
     /// photographs does not sit in memory for a window nobody is looking at.
     func empty() {

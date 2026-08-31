@@ -10,6 +10,14 @@ final class ReadoutBar: NSView {
     private let swatch = SwatchView()
     private let left = ReadoutBar.label(alignment: .left)
     private let right = ReadoutBar.label(alignment: .right)
+    /// For a file that is wrong about which way up it is. Both directions,
+    /// because one button means three clicks to go the other way.
+    private let rotateLeft = ReadoutBar.rotateButton(
+        symbol: "rotate.left", tip: "Rotate anticlockwise",
+        action: #selector(ViewerWindowController.rotateImageLeft(_:)))
+    private let rotateRight = ReadoutBar.rotateButton(
+        symbol: "rotate.right", tip: "Rotate clockwise",
+        action: #selector(ViewerWindowController.rotateImageRight(_:)))
 
     static let height: CGFloat = 26
 
@@ -18,7 +26,7 @@ final class ReadoutBar: NSView {
         wantsLayer = true
         layer?.backgroundColor = Theme.background.cgColor
 
-        for v in [swatch, left, right] as [NSView] {
+        for v in [swatch, left, rotateLeft, rotateRight, right] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -33,7 +41,19 @@ final class ReadoutBar: NSView {
 
             right.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             right.centerYAnchor.constraint(equalTo: centerYAnchor),
-            right.leadingAnchor.constraint(greaterThanOrEqualTo: left.trailingAnchor, constant: 12),
+
+            // Sized explicitly: an 11pt glyph is a smaller target than anyone can
+            // reliably hit, and the footer has the room.
+            rotateRight.trailingAnchor.constraint(equalTo: right.leadingAnchor, constant: -8),
+            rotateRight.centerYAnchor.constraint(equalTo: centerYAnchor),
+            rotateRight.widthAnchor.constraint(equalToConstant: 22),
+            rotateRight.heightAnchor.constraint(equalToConstant: 20),
+            rotateLeft.trailingAnchor.constraint(equalTo: rotateRight.leadingAnchor, constant: 0),
+            rotateLeft.centerYAnchor.constraint(equalTo: centerYAnchor),
+            rotateLeft.widthAnchor.constraint(equalToConstant: 22),
+            rotateLeft.heightAnchor.constraint(equalToConstant: 20),
+
+            left.trailingAnchor.constraint(lessThanOrEqualTo: rotateLeft.leadingAnchor, constant: -12),
         ])
     }
 
@@ -42,6 +62,23 @@ final class ReadoutBar: NSView {
     func refreshBackground() {
         layer?.backgroundColor = Theme.background.cgColor
         ThemeRefresh.apply(to: self)
+        for b in [rotateLeft, rotateRight] { b.contentTintColor = Theme.text(.tertiary) }
+    }
+
+    /// Target stays nil so the action travels the responder chain to whichever
+    /// window is in front, the same way the title bar's panel buttons do.
+    private static func rotateButton(symbol: String, tip: String,
+                                     action: Selector) -> NSButton {
+        let b = NSButton()
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        b.toolTip = tip
+        b.bezelStyle = .texturedRounded
+        b.isBordered = false
+        b.imagePosition = .imageOnly
+        b.contentTintColor = Theme.text(.tertiary)
+        b.action = action
+        return b
     }
 
     private static func label(alignment: NSTextAlignment) -> NSTextField {
