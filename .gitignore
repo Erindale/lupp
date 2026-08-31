@@ -1,0 +1,5 @@
+.build/
+.swiftpm/
+Lupp.app/
+*.iconset/
+.DS_Store
