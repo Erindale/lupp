@@ -91,17 +91,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         // The backdrop is a stored preference, so a new window has to adopt it
         // rather than starting at whatever the defaults happened to be.
         applyBackgroundEverywhere()
-        // Reload the LUT you were last using, so it survives a relaunch. This has
-        // to precede refreshLibrary(), or the popup is built from a library that
-        // hasn't been repopulated yet and shows None over a loaded LUT.
-        if Preferences.debug { NSLog("Lupp: lastLUTPath = %@", Preferences.lastLUTPath ?? "(nil)") }
-        if let path = Preferences.lastLUTPath {
-            if FileManager.default.fileExists(atPath: path) {
-                applyLUT(at: URL(fileURLWithPath: path), announceFailure: false)
-            } else {
-                Preferences.lastLUTPath = nil
-            }
-        }
+        // Deliberately no LUT is loaded here. Opening an image shows the image;
+        // a look is something you ask for, per image, from the library or a preset.
         refreshLibrary()
         if !deferOpening { open(url: url) }
     }
@@ -328,7 +319,6 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private func turnLUTOff() {
         canvas.clearLUT()
         currentLUTPath = nil
-        Preferences.lastLUTPath = nil
         rememberGrade()
         refreshLibrary()
     }
@@ -412,7 +402,6 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             // working after the original is tidied away.
             let stored = LUTLibrary.add(importing: url)
             currentLUTPath = stored
-            Preferences.lastLUTPath = stored
             rememberGrade()
             refreshLibrary()
             return true
@@ -580,9 +569,31 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             return
         }
 
-        // Colour space comes from the file; the view transform is chosen from what
-        // kind of file it is, because no file records one.
-        canvas.display.viewTransform = Preferences.viewTransform(sceneLinear: img.isSceneLinear)
+        // Every image opens unedited. A grade belongs to the picture it was made
+        // for, so carrying one into the next file would quietly show you someone
+        // else's photograph — and a viewer's first job is to be trusted about
+        // what is in the file.
+        //
+        // The diagnostic overlays are not edits and do survive: if you were
+        // looking at the blue channel, you were doing that on purpose and are
+        // probably still doing it.
+        var fresh = Renderer.DisplayState()
+        fresh.channel = canvas.display.channel
+        fresh.showClipping = canvas.display.showClipping
+        fresh.falseColour = canvas.display.falseColour
+        // The view transform is not a grade — it is how a file of this kind has
+        // to be rendered to be correct at all.
+        fresh.viewTransform = Preferences.viewTransform(sceneLinear: img.isSceneLinear)
+        // Nor is this: it says how a LUT should be *read*, and your LUTs keep
+        // coming from the same camera. Inert until you actually load one.
+        fresh.lutInput = LUTInput(rawValue: Preferences.lutInput) ?? .display
+        canvas.display = fresh
+        canvas.clearLUT()
+        canvas.cropAspect = nil
+        currentLUTPath = nil
+        currentPresetName = nil
+
+        refreshLibrary()
         syncPanelControls()
         recomputeScopes()
 

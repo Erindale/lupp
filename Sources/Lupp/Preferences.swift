@@ -44,12 +44,6 @@ enum Preferences {
         UserDefaults.standard.set(t.rawValue, forKey: key)
     }
 
-    /// The LUT you were last using, reloaded on launch.
-    static var lastLUTPath: String? {
-        get { UserDefaults.standard.string(forKey: "lastLUTPath") }
-        set { UserDefaults.standard.set(newValue, forKey: "lastLUTPath") }
-    }
-
     /// The export format you chose last, so the panel opens on it again.
     static var lastExportExtension: String {
         get { UserDefaults.standard.string(forKey: "lastExportExtension") ?? "png" }

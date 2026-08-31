@@ -305,6 +305,19 @@ enum Selftest {
 
         var plain = Renderer.DisplayState()
         plain.viewTransform = .standard
+
+        // The state every image now opens in. Checked field by field rather than
+        // only through the renderer, because a default that quietly stops being
+        // neutral is exactly the bug that makes a viewer untrustworthy: you would
+        // be looking at a graded picture and have no reason to suspect it.
+        check("a new image opens with nothing applied",
+              plain.exposureEV == 0 && plain.whiteBalance == SIMD3<Float>(1, 1, 1)
+                  && plain.contrast == 1 && plain.blackPoint == 0 && plain.whitePoint == 1
+                  && !plain.tetraActive && !plain.cropEnabled && !plain.cropApplied
+                  && plain.lutName == nil && !plain.showClipping && !plain.falseColour
+                  && plain.channel == .rgb,
+              detail: "EV \(plain.exposureEV), contrast \(plain.contrast), LUT \(plain.lutName ?? "none")")
+
         guard let p = pixels(plain) else { return fail("GPU", "export failed") }
 
         check("GPU round-trips sRGB unchanged",
