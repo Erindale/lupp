@@ -52,7 +52,7 @@ let plist: [String: Any] = [
         "UTTypeIdentifier": "xyz.nodegroup.lupp.session",
         "UTTypeDescription": "Lupp Session",
         "UTTypeConformsTo": ["public.json", "public.data"],
-        "UTTypeTagSpecification": ["public.filename-extension": ["luppsession"]],
+        "UTTypeTagSpecification": ["public.filename-extension": ["lupp", "luppsession"]],
     ]],
 ]
 

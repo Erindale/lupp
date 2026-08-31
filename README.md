@@ -330,7 +330,7 @@ tools quietly get the numbers wrong.
 
 ## Sessions
 
-`File ▸ Save Session…` (⌘S) writes a `.luppsession` beside your work: which image
+`File ▸ Save Session…` (⌘S) writes a `.lupp` file beside your work: which image
 you were editing, and every value you set — light, white balance, cube corners,
 LUT choice and amount and input, crop, bypasses, which channel you were looking
 at. Open one (⇧⌘O, or double-click) and it reopens that image with all of it
@@ -340,8 +340,12 @@ live and still adjustable. It is a starting point restored, not a result frozen.
 kilobytes of numbers, and nothing is ever written back to your source. Both the
 path and a file-system bookmark are stored: the path is what you can read and fix
 in a text editor, the bookmark is what still finds the file after it has been
-moved or renamed. If the image is gone entirely, Lupp says where it was rather
-than opening something misleading.
+moved or renamed.
+
+If the image can't be found at all, Lupp names it, shows where it used to be, and
+offers **Find…** so you can point at it — starting the file picker in the folder
+it used to live in, since a moved file is often still nearby. Whatever you choose
+is written back into the session, so it asks once rather than every time.
 
 ## The icon
 

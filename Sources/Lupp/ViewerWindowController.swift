@@ -699,7 +699,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     /// Restores a session into this window: the image it names, then every value.
     func open(session url: URL) {
-        let session: Session
+        var session: Session
         do { session = try Session.read(from: url) } catch {
             let a = NSAlert()
             a.messageText = "Couldn’t read that session"
@@ -710,27 +710,54 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
         let imageURL: URL
         switch session.resolveImage() {
-        case .found(let u): imageURL = u
-        case .moved(let u):
+        case .found(let u):
             imageURL = u
-            // Worth saying: the session still works, but it is no longer pointing
-            // where it says it is, and the next save will quietly correct that.
-            let a = NSAlert()
-            a.messageText = "The image has moved"
-            a.informativeText = "Found it at \(u.path). Saving this session again will record the new location."
-            a.runModal()
+        case .moved(let u):
+            // The bookmark exists precisely so a moved file is not an event.
+            // Repair the record quietly rather than interrupting to report it.
+            imageURL = u
+            session.relocate(to: u)
+            try? session.write(to: url)
         case .missing(let path):
-            let a = NSAlert()
-            a.messageText = "Can’t find the image this session refers to"
-            a.informativeText = "It was at \(path). A session records where an image lives rather than embedding it, so the file has to still be somewhere Lupp can reach."
-            a.runModal()
-            return
+            guard let located = askToLocate(missing: path) else { return }
+            imageURL = located
+            session.relocate(to: located)
+            try? session.write(to: url)
         }
 
         sessionURL = url
         pendingSession = session
         hasSizedToImage = true      // the window is the user's, not the session's
         open(url: imageURL)
+    }
+
+    /// Offer to go and find an image the session can no longer see.
+    ///
+    /// A session that only reports the problem makes you repair it by hand in a
+    /// text editor; one that lets you point at the file turns a dead end into two
+    /// clicks. Whatever is chosen is written back, so it is asked once.
+    private func askToLocate(missing path: String) -> URL? {
+        let name = (path as NSString).lastPathComponent
+        let a = NSAlert()
+        a.messageText = "Can’t find “\(name)”"
+        a.informativeText = "This session refers to an image at:\n\(path)\n\nA session records where an image lives rather than embedding it. If you’ve moved or renamed it, point Lupp at it and the session will be updated to match."
+        a.addButton(withTitle: "Find…")
+        a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return nil }
+
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = ImageLoader.readableTypes.compactMap { UTType($0) }
+        panel.message = "Find “\(name)”"
+        panel.nameFieldStringValue = name
+        // Start where it used to be, since a moved file is often still nearby.
+        let oldDir = (path as NSString).deletingLastPathComponent
+        if FileManager.default.fileExists(atPath: oldDir) {
+            panel.directoryURL = URL(fileURLWithPath: oldDir)
+        }
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
     }
 
     // MARK: - Export

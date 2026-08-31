@@ -13,7 +13,9 @@ import simd
 /// fix in a text editor; the bookmark is what still finds the file after it has
 /// been moved or renamed.
 struct Session: Codable {
-    static let fileExtension = "luppsession"
+    static let fileExtension = "lupp"
+    /// Sessions written before the extension was shortened still open.
+    static let legacyExtensions = ["luppsession"]
     static let typeIdentifier = "xyz.nodegroup.lupp.session"
 
     var version = 1
@@ -124,6 +126,14 @@ struct Session: Codable {
         case missing(String)
     }
 
+    /// Point the session at a different file, keeping everything else.
+    mutating func relocate(to url: URL) {
+        imagePath = url.path
+        bookmark = try? url.bookmarkData(options: .minimalBookmark,
+                                         includingResourceValuesForKeys: nil,
+                                         relativeTo: nil)
+    }
+
     /// Path first, because it is the one a person can reason about; bookmark
     /// second, because it is the one that survives a move.
     func resolveImage() -> ResolveResult {
@@ -154,6 +164,7 @@ struct Session: Codable {
     }
 
     static func isSession(_ url: URL) -> Bool {
-        url.pathExtension.lowercased() == fileExtension
+        let e = url.pathExtension.lowercased()
+        return e == fileExtension || legacyExtensions.contains(e)
     }
 }
