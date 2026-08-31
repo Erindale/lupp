@@ -515,13 +515,20 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// The backdrop is one colour for the whole window, so a change to it has to
     /// reach the chrome as well as the canvas.
     func canvasDidChangeBackground(_ c: ImageCanvasView) {
+        applyBackgroundEverywhere()
+        canvasReadoutChanged(c)
+    }
+
+    /// One backdrop for the whole window, so a change to it has to reach the
+    /// chrome, both panels and the footer — and, past the point where white text
+    /// stops reading on it, the window's appearance too.
+    private func applyBackgroundEverywhere() {
+        window?.appearance = Theme.appearance
         window?.backgroundColor = Theme.background
         window?.contentView?.layer?.backgroundColor = Theme.background.cgColor
-        for p in [scopes, grade] as [NSView] {
-            p.layer?.backgroundColor = Theme.background.cgColor
-        }
+        scopes.refreshBackground()
+        grade.refreshBackground()
         readout.refreshBackground()
-        canvasReadoutChanged(c)
     }
 
     /// A dropped file replaces what this window is showing; extra files beyond

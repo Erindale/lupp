@@ -18,6 +18,22 @@ enum Theme {
         set { Preferences.backgroundLevel = min(max(newValue, 0.02), 0.92) }
     }
 
+    /// Past this the backdrop is light enough that white text stops being
+    /// readable on it, so the whole window flips to the light appearance and
+    /// AppKit's semantic colours invert with it — labels, controls and all.
+    static var isLightBackground: Bool { backgroundSRGB > 0.5 }
+
+    static var appearance: NSAppearance? {
+        NSAppearance(named: isLightBackground ? .aqua : .darkAqua)
+    }
+
+    /// Scope plates stay dark whatever the surround, as they do in every grading
+    /// tool — the traces are drawn light, and a plot that inverted with the chrome
+    /// would make them vanish.
+    static var scopeTrackTint: NSColor {
+        NSColor(white: isLightBackground ? 0.3 : 0.72, alpha: 1)
+    }
+
     static var background: NSColor {
         NSColor(srgbRed: backgroundSRGB, green: backgroundSRGB, blue: backgroundSRGB, alpha: 1)
     }

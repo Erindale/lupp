@@ -28,6 +28,17 @@ class SidePanel: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// Repaint after the backdrop changes. The layer colour is not enough: the
+    /// scope views draw their own plates and have to be asked again.
+    func refreshBackground() {
+        layer?.backgroundColor = Theme.background.cgColor
+        func mark(_ v: NSView) {
+            v.needsDisplay = true
+            for sub in v.subviews { mark(sub) }
+        }
+        mark(self)
+    }
+
     /// Wraps a column of views in a scroll view with Flöt-style overlay bars, and
     /// pins every child to the column width.
     func install(column views: [NSView], fullWidth: [NSView]) {
@@ -91,6 +102,40 @@ class SidePanel: NSView {
         return f
     }
 
+    /// A section title with a reset control at the right end.
+    ///
+    /// Per section rather than one blanket reset, because undoing a white balance
+    /// experiment shouldn't cost you the cube warp you were happy with.
+    func sectionHeader(_ t: String, reset: @escaping () -> Void) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+        let label = sectionLabel(t)
+        let button = ActionButton(action: reset)
+        button.image = NSImage(systemSymbolName: "arrow.counterclockwise",
+                               accessibilityDescription: "Reset \(t)")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+        button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.bezelStyle = .texturedRounded
+        button.contentTintColor = .tertiaryLabelColor
+        button.toolTip = "Reset \(t.lowercased()) to defaults"
+
+        for v in [label, button] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 14),
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            button.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            button.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            button.widthAnchor.constraint(equalToConstant: 16),
+            button.heightAnchor.constraint(equalToConstant: 14),
+        ])
+        return row
+    }
+
     func caption(_ t: String = "") -> NSTextField {
         let f = NSTextField(labelWithString: t)
         f.font = .systemFont(ofSize: 9)
@@ -128,6 +173,24 @@ class SidePanel: NSView {
         v.translatesAutoresizingMaskIntoConstraints = false
         return v
     }
+}
+
+/// An NSButton that carries its own closure, so callers don't each need a
+/// selector and a stored property to hang it on.
+final class ActionButton: NSButton {
+    private let handler: () -> Void
+
+    init(action: @escaping () -> Void) {
+        self.handler = action
+        super.init(frame: .zero)
+        title = ""
+        target = self
+        self.action = #selector(fire)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    @objc private func fire() { handler() }
 }
 
 final class FlippedView: NSView {

@@ -40,8 +40,7 @@ final class GradePanel: SidePanel {
     private var tetraRows: [TetraSliderRow] = []
     private let tetraAmount = NSSlider(value: 100, minValue: 0, maxValue: 100,
                                        target: nil, action: nil)
-    private let tetraButtons = NSSegmentedControl(labels: ["Reset", "Save Preset…"],
-                                                  trackingMode: .momentary, target: nil, action: nil)
+    private let savePresetButton = NSButton(title: "Save Preset…", target: nil, action: nil)
 
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let presetButtons = NSSegmentedControl(labels: ["Use", "Delete", "Apply Last"],
@@ -76,9 +75,12 @@ final class GradePanel: SidePanel {
         style(tetraAmount)
         tetraAmount.target = self
         tetraAmount.action = #selector(tetraChanged(_:))
-        style(tetraButtons, size: .small, font: 10)
-        tetraButtons.target = self
-        tetraButtons.action = #selector(tetraButtonPressed(_:))
+        savePresetButton.bezelStyle = .rounded
+        savePresetButton.controlSize = .small
+        savePresetButton.font = .systemFont(ofSize: 11)
+        savePresetButton.target = self
+        savePresetButton.action = #selector(savePresetPressed(_:))
+        savePresetButton.translatesAutoresizingMaskIntoConstraints = false
 
         style(presetPopup)
         style(presetButtons, size: .small, font: 10)
@@ -98,29 +100,37 @@ final class GradePanel: SidePanel {
 
         let lightNote = caption("Linear, before the view transform — exposure and balance behave like light, not like edits to a finished picture. Contrast pivots on 0.18 scene grey.")
 
+        let lightHeader = sectionHeader("Light") { [weak self] in self?.resetLight() }
+        let wbHeader = sectionHeader("White balance") { [weak self] in self?.resetWhiteBalance() }
+        let tetraHeader = sectionHeader("Grade — tetrahedral") { [weak self] in self?.resetTetra() }
+        let lutHeader = sectionHeader("LUT") { [weak self] in
+            self?.emit { self?.onClearLUT?() }
+        }
+
         var column: [NSView] = [
-            sectionLabel("Light"), exposureRow, contrastRow, pivotRow,
-            sectionLabel("White balance"), wbRows[0], wbRows[1], wbRows[2],
+            lightHeader, exposureRow, contrastRow, pivotRow,
+            wbHeader, wbRows[0], wbRows[1], wbRows[2],
             lightNote,
             separator(),
-            sectionLabel("Grade — tetrahedral"),
+            tetraHeader,
         ]
         column += tetraRowViews
-        column += [caption("Mix"), tetraAmount, tetraButtons, tetraNote]
+        column += [caption("Mix"), tetraAmount, tetraNote]
 
         // Order down the panel is the order the pixels travel: light, then the
         // cube warp, then the LUT on top, then what to do with the result.
         column += [separator(),
-                   sectionLabel("LUT"), lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
+                   lutHeader, lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
                    separator(),
-                   sectionLabel("Presets"), presetPopup, presetButtons,
+                   sectionLabel("Presets"), presetPopup, presetButtons, savePresetButton,
                    separator(),
                    sectionLabel("Export"), exportButton, exportNote]
 
         install(column: column,
                 fullWidth: [lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
-                            tetraAmount, tetraButtons, tetraNote, lightNote,
-                            presetPopup, presetButtons, exportButton, exportNote]
+                            tetraAmount, tetraNote, lightNote, savePresetButton,
+                            presetPopup, presetButtons, exportButton, exportNote,
+                            lightHeader, wbHeader, tetraHeader, lutHeader]
                         + tetraRowViews + lightRows + balanceRows)
     }
 
@@ -167,13 +177,24 @@ final class GradePanel: SidePanel {
         emit { onTetra?(corners, amount, !corners.isIdentity) }
     }
 
-    @objc private func tetraButtonPressed(_ sender: NSSegmentedControl) {
-        guard sender.selectedSegment == 0 else { emit { onSavePreset?() }; return }
+    @objc private func savePresetPressed(_ sender: Any?) {
+        emit { onSavePreset?() }
+    }
+
+    private func resetLight() {
+        for row in [exposureRow, contrastRow, pivotRow] { row.resetToDefault() }
+        lightChanged()
+    }
+
+    private func resetWhiteBalance() {
+        for row in wbRows { row.resetToDefault() }
+        lightChanged()
+    }
+
+    private func resetTetra() {
         for row in tetraRows { row.resetToDefault() }
-        for row in [exposureRow, contrastRow, pivotRow] + wbRows { row.resetToDefault() }
         tetraAmount.doubleValue = 100
         tetraChanged(nil)
-        lightChanged()
     }
 
     // MARK: - LUT and presets

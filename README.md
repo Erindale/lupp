@@ -190,6 +190,11 @@ first window you ever open sizes itself to the image.
 | ⌥⌘I | Show / hide the inspector panel |
 | ⇧⌘E | Export as displayed |
 | Right-drag on the image | Lighten / darken the backdrop |
+
+The backdrop is one colour for the whole window, and past the point where white
+text stops reading on it the window flips to the light appearance — labels,
+controls and the scrollbar pill invert with it. Scope plates stay dark whatever
+the surround, as they do in every grading tool, so the traces never vanish.
 | 1–6 | RGB / R / G / B / A / Luma |
 | `C` / `F` | Clipping overlay / false colour |
 

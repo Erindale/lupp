@@ -34,9 +34,11 @@ final class OverlayScroller: NSScroller {
             ? NSRect(x: r.midX - t / 2, y: r.minY + i, width: t, height: max(t, r.height - i * 2))
             : NSRect(x: r.minX + i, y: r.midY - t / 2, width: max(t, r.width - i * 2), height: t)
 
-        // Brighter while being dragged, the way Flöt's pill lifts on hover.
+        // Brighter while being dragged, the way Flöt's pill lifts on hover. The
+        // pill inverts with the backdrop, or it disappears on a light one.
         let alpha: CGFloat = (window?.firstResponder === self) ? 0.75 : 0.4
-        NSColor.white.withAlphaComponent(alpha).setFill()
+        let base: NSColor = Theme.isLightBackground ? .black : .white
+        base.withAlphaComponent(alpha).setFill()
         NSBezierPath(roundedRect: pill, xRadius: t / 2, yRadius: t / 2).fill()
     }
 }

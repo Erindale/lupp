@@ -41,6 +41,8 @@ final class ReadoutBar: NSView {
 
     func refreshBackground() {
         layer?.backgroundColor = Theme.background.cgColor
+        needsDisplay = true
+        for v in subviews { v.needsDisplay = true }
     }
 
     private static func label(alignment: NSTextAlignment) -> NSTextField {
