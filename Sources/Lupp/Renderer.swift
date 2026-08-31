@@ -22,6 +22,7 @@ final class Renderer {
     private var imageSize = CGSize.zero
 
     private var lutTexture: MTLTexture?
+    private var lutSize = 2
     private var lutDomainMin = SIMD4<Float>(0, 0, 0, 0)
     private var lutDomainMax = SIMD4<Float>(1, 1, 1, 1)
     /// Bound whenever no LUT is loaded. Metal wants a texture at the slot even
@@ -58,6 +59,13 @@ final class Renderer {
         var falseColour: UInt32
         var lutEnabled: UInt32
         var tetraEnabled: UInt32
+        var lutInput: UInt32
+        /// Maps a 0…1 index onto the cube's texel centres. A cube's first and
+        /// last entries are its endpoints, but a texture's first and last texel
+        /// centres sit half a texel inside the edge — addressing 0…1 directly
+        /// therefore squeezes the whole LUT toward its middle.
+        var lutScale: Float
+        var lutOffset: Float
         /// Export applies the display encode in-shader; the on-screen drawable is
         /// extended-linear and lets CoreAnimation do it instead.
         var encodeOutput: UInt32
@@ -135,6 +143,7 @@ final class Renderer {
         var falseColour = false
         var lutAmount: Float = 1
         var lutName: String?
+        var lutInput: LUTInput = .display
         var tetra = TetraCorners()
         var tetraAmount: Float = 1
     }
@@ -201,6 +210,7 @@ final class Renderer {
                         bytesPerRow: n * 8, bytesPerImage: n * n * 8)
         }
         lutTexture = tex
+        lutSize = n
         lutDomainMin = SIMD4(lut.domainMin, 0)
         lutDomainMax = SIMD4(lut.domainMax, 1)
         return true
@@ -554,6 +564,9 @@ final class Renderer {
                  falseColour: display.falseColour ? 1 : 0,
                  lutEnabled: lut ? 1 : 0,
                  tetraEnabled: tetra ? 1 : 0,
+                 lutInput: UInt32(display.lutInput.rawValue),
+                 lutScale: Float(lutSize - 1) / Float(lutSize),
+                 lutOffset: 0.5 / Float(lutSize),
                  encodeOutput: encodeOutput)
     }
 
@@ -620,8 +633,39 @@ final class Renderer {
         uint   falseColour;
         uint   lutEnabled;
         uint   tetraEnabled;
+        uint   lutInput;
+        float  lutScale;
+        float  lutOffset;
         uint   encodeOutput;
     };
+
+    /// Normalised value to a cube lookup coordinate, landing on texel centres.
+    float3 lutCoord(float3 v, constant Uniforms &u) {
+        float3 span = max(u.lutDomainMax.xyz - u.lutDomainMin.xyz, 1e-6);
+        float3 t = clamp((v - u.lutDomainMin.xyz) / span, 0.0, 1.0);
+        return t * u.lutScale + u.lutOffset;
+    }
+
+    // Scene-linear to a camera log encoding, using each vendor's published
+    // formula. These are transfer curves only — see the note in the README about
+    // gamut, which a .cube also assumes and which a file rarely tells us.
+    float3 linearToLog(float3 x, uint kind) {
+        if (kind == 1u) {                       // Sony S-Log3
+            return select((x * (171.2102946929 - 95.0) / 0.01125000 + 95.0) / 1023.0,
+                          (420.0 + log10((x + 0.01) / 0.19) * 261.5) / 1023.0,
+                          x >= 0.01125000);
+        }
+        if (kind == 2u) {                       // ARRI LogC3, EI 800
+            const float cut = 0.010591, a = 5.555556, b = 0.052272;
+            const float c = 0.247190, d = 0.385537, e = 5.367655, f = 0.092809;
+            return select(e * x + f, c * log10(a * x + b) + d, x > cut);
+        }
+        if (kind == 3u) {                       // ACEScct
+            const float brk = 0.0078125, A = 10.5402377416545, B = 0.0729055341958355;
+            return select(A * x + B, (log2(max(x, 1e-10)) + 9.72) / 17.52, x > brk);
+        }
+        return x;
+    }
 
     // Contrast as a power around a pivot, in linear.
     //
@@ -810,27 +854,32 @@ final class Renderer {
         float srcLuma = dot(max(graded, 0.0), float3(0.2126, 0.7152, 0.0722));
         if (over) { srcLuma = max(srcLuma, 1.0); }
 
-        rgb = applyView(rgb, u.viewTransform);
+        // Everything from here is in the display domain, where the cube corners
+        // and a creative .cube are both defined.
+        float3 enc;
+        bool logLUT = u.lutEnabled != 0u && u.lutInput != 0u && u.lutAmount > 0.0;
 
-        // Grading happens in the display domain, where both the cube corners and
-        // a creative .cube LUT are defined. One encode/decode pair serves both.
-        // A LUT authored for log input will not be right here — that needs an
-        // input transform Lupp doesn't have yet.
-        bool grading = (u.tetraEnabled != 0u && u.tetraAmount > 0.0)
-                    || (u.lutEnabled != 0u && u.lutAmount > 0.0);
-        if (grading) {
-            float3 enc = clamp(linearToSrgb(rgb), 0.0, 1.0);
-            if (u.tetraEnabled != 0u && u.tetraAmount > 0.0) {
-                enc = mix(enc, tetraInterp(enc, tetra), u.tetraAmount);
-                enc = clamp(enc, 0.0, 1.0);
-            }
+        if (logLUT) {
+            // A log LUT *is* the display rendering: feed it the log-encoded scene
+            // values and take its output as already display-referred. Running the
+            // view transform as well would tone-map twice.
+            float3 lv = linearToLog(max(rgb, 0.0), u.lutInput);
+            float3 looked = lut.sample(lutSmp, lutCoord(lv, u)).rgb;
+            // Blended against the ordinary look, so the amount slider still means
+            // something rather than fading toward black.
+            enc = mix(clamp(linearToSrgb(applyView(rgb, u.viewTransform)), 0.0, 1.0),
+                      looked, u.lutAmount);
+        } else {
+            enc = clamp(linearToSrgb(applyView(rgb, u.viewTransform)), 0.0, 1.0);
             if (u.lutEnabled != 0u && u.lutAmount > 0.0) {
-                float3 span = max(u.lutDomainMax.xyz - u.lutDomainMin.xyz, 1e-6);
-                float3 idx = clamp((enc - u.lutDomainMin.xyz) / span, 0.0, 1.0);
-                enc = mix(enc, lut.sample(lutSmp, idx).rgb, u.lutAmount);
+                enc = mix(enc, lut.sample(lutSmp, lutCoord(enc, u)).rgb, u.lutAmount);
             }
-            rgb = srgbToLinear(enc);
         }
+
+        if (u.tetraEnabled != 0u && u.tetraAmount > 0.0) {
+            enc = clamp(mix(enc, tetraInterp(enc, tetra), u.tetraAmount), 0.0, 1.0);
+        }
+        rgb = srgbToLinear(enc);
 
         if (u.falseColour != 0u) {
             rgb = srgbToLinear(falseColourOf(srcLuma));

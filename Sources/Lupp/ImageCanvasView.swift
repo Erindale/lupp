@@ -178,6 +178,12 @@ final class ImageCanvasView: MTKView {
         return ok
     }
 
+    /// Ratio the crop is locked to, in pixels; nil is free.
+    var cropAspect: Double? {
+        get { cropOverlay.aspect }
+        set { cropOverlay.aspect = newValue }
+    }
+
     /// A small graded render for the scopes to measure — same shader as the
     /// screen, so the traces and the picture always agree.
     func renderSampled(maxDimension: Int) -> (data: [Float], width: Int, height: Int)? {

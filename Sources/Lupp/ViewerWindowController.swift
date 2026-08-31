@@ -72,6 +72,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             window.setFrameOrigin(NSPoint(x: last.minX + 24, y: last.minY - 24))
         }
         applyPanelVisibility(animated: false)
+        LUTLibrary.migrateStrays()
         // The backdrop is a stored preference, so a new window has to adopt it
         // rather than starting at whatever the defaults happened to be.
         applyBackgroundEverywhere()
@@ -247,6 +248,11 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             }
             self.canvas.display = d
         }
+        grade.onLUTInput = { [weak self] input in
+            self?.canvas.display.lutInput = input
+            Preferences.lutInput = input.rawValue
+            self?.rememberGrade()
+        }
         grade.onCropApply = { [weak self] applied in
             self?.canvas.display.cropApplied = applied
         }
@@ -259,8 +265,12 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         }
         grade.onCropAspect = { [weak self] aspect in
             guard let self, let img = self.canvas.image else { return }
-            guard var a = aspect else { return }          // Free: leave it alone
+            guard var a = aspect else {                   // Free
+                self.canvas.cropAspect = nil
+                return
+            }
             if a == 0 { a = Double(img.width) / Double(img.height) }   // Original
+            self.canvas.cropAspect = a
             var c = self.canvas.display.crop
             // Fit the requested ratio inside the current crop, keeping its centre,
             // so choosing a ratio refines what you have rather than starting over.
@@ -383,9 +393,11 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             var name = "\(lut.title) · \(lut.size)³"
             if lut.wasOneDimensional { name += " · from 1D" }
             canvas.display.lutName = name
-            currentLUTPath = url.path
-            Preferences.lastLUTPath = url.path
-            LUTLibrary.add(url.path)
+            // Copied into the app's storage on the way in, so the library keeps
+            // working after the original is tidied away.
+            let stored = LUTLibrary.add(importing: url)
+            currentLUTPath = stored
+            Preferences.lastLUTPath = stored
             rememberGrade()
             refreshLibrary()
             return true

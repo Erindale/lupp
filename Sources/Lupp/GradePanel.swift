@@ -28,11 +28,13 @@ final class GradePanel: SidePanel {
     var onCropAspect: ((Double?) -> Void)?
     var onCropReset: (() -> Void)?
     var onCropApply: ((Bool) -> Void)?
+    var onLUTInput: ((LUTInput) -> Void)?
 
     private let lutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let lutButtons = NSSegmentedControl(labels: ["Add…", "Remove", "Off"],
+    private let lutButtons = NSSegmentedControl(labels: ["Add…", "Remove"],
                                                 trackingMode: .momentary, target: nil, action: nil)
     private let lutLabel = ThemedLabel("No LUT", role: .tertiary, size: 9)
+    private let lutInput = NSPopUpButton(frame: .zero, pullsDown: false)
     private let lutSlider = FineSlider()
 
     private lazy var blackRow = LabelledSliderRow(label: "Black point", initial: 0, span: 0.4)
@@ -89,6 +91,13 @@ final class GradePanel: SidePanel {
         lutButtons.target = self
         lutButtons.action = #selector(lutButtonPressed(_:))
         lutSlider.minValue = 0; lutSlider.maxValue = 100; lutSlider.doubleValue = 100
+        style(lutInput)
+        lutInput.target = self
+        lutInput.action = #selector(lutInputChanged(_:))
+        for i in LUTInput.allCases {
+            lutInput.addItem(withTitle: i.label)
+            lutInput.lastItem?.tag = i.rawValue
+        }
         style(lutSlider)
         lutSlider.target = self
         lutSlider.action = #selector(lutAmountChanged(_:))
@@ -125,7 +134,7 @@ final class GradePanel: SidePanel {
         exportButton.translatesAutoresizingMaskIntoConstraints = false
 
         let tetraNote = caption("Moves the six hue corners of the RGB cube. Black, white and the greys between them are fixed, so neutrals stay neutral.")
-        let lutNote = caption("Applied after the view transform, in display space. A LUT authored for log input won’t be right here.")
+        let lutNote = caption("Display LUTs apply after the view transform. Choosing a log input instead means the LUT is the display rendering — it gets log-encoded scene values and its output is taken as final, so the view transform steps aside rather than tone-mapping twice.")
         let exportNote = caption("Writes the image as shown — transform, LUT, grade and exposure baked in, at full resolution.")
 
         let lightNote = caption("Linear, before the view transform — these behave like light, not like edits to a finished picture. Black and white point set what counts as black and white first; contrast pivots on 0.18 scene grey.")
@@ -186,7 +195,7 @@ final class GradePanel: SidePanel {
         column += [separator(),
                    cropHeader, cropAspect, cropApply, cropSize, cropNote,
                    separator(),
-                   lutHeader, lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
+                   lutHeader, lutPopup, lutButtons, lutLabel, lutInput, lutSlider, lutNote,
                    separator(),
                    sectionLabel("Presets"), presetPopup, presetButtons, savePresetButton,
                    separator(),
@@ -195,12 +204,12 @@ final class GradePanel: SidePanel {
         sectionViews[.light] = [blackRow, whiteRow, exposureRow, contrastRow, pivotRow]
         sectionViews[.whiteBalance] = wbRows
         sectionViews[.tetra] = tetraRowViews + ([tetraAmount] as [NSView])
-        sectionViews[.lut] = [lutPopup, lutButtons, lutLabel, lutSlider]
+        sectionViews[.lut] = [lutPopup, lutButtons, lutLabel, lutInput, lutSlider]
         sectionViews[.crop] = [cropAspect, cropApply, cropSize]
 
         // Built in named pieces: one literal mixing this many control types is
         // more than the type checker will do in reasonable time.
-        var wide: [NSView] = [lutPopup, lutButtons, lutLabel, lutSlider, lutNote]
+        var wide: [NSView] = [lutPopup, lutButtons, lutLabel, lutInput, lutSlider, lutNote]
         wide += [tetraAmount, tetraNote, lightNote, savePresetButton] as [NSView]
         wide += [presetPopup, presetButtons, exportButton, exportNote] as [NSView]
         wide += [masterHeader, lightHeader, wbHeader, tetraHeader, lutHeader] as [NSView]
@@ -307,15 +316,16 @@ final class GradePanel: SidePanel {
 
     @objc private func lutButtonPressed(_ sender: NSSegmentedControl) {
         emit {
-            switch sender.selectedSegment {
-            case 0: onLoadLUT?()
-            case 1:
-                if let path = lutPopup.selectedItem?.representedObject as? String {
-                    onRemoveLUT?(path)
-                }
-            default: onClearLUT?()
+            if sender.selectedSegment == 0 { onLoadLUT?() }
+            else if let path = lutPopup.selectedItem?.representedObject as? String {
+                onRemoveLUT?(path)
             }
         }
+    }
+
+    @objc private func lutInputChanged(_ sender: NSPopUpButton) {
+        guard let i = LUTInput(rawValue: sender.selectedTag()) else { return }
+        emit { onLUTInput?(i) }
     }
 
     @objc private func lutAmountChanged(_ sender: NSSlider) {
@@ -394,10 +404,13 @@ final class GradePanel: SidePanel {
         if let name = display.lutName {
             lutLabel.stringValue = name
             lutSlider.isEnabled = true
+            lutInput.isEnabled = true
         } else {
             lutLabel.stringValue = "No LUT"
             lutSlider.isEnabled = false
+            lutInput.isEnabled = false
         }
+        if !handlingControlAction { lutInput.selectItem(withTag: display.lutInput.rawValue) }
 
         guard !handlingControlAction else { return }
         lutSlider.doubleValue = Double(display.lutAmount) * 100

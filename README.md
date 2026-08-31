@@ -110,7 +110,8 @@ coordinate — the difference between being able to set a value and having to ty
 it.
 
 **Crop** — drag the rectangle on the image, with rule-of-thirds guides and aspect
-presets that refine the crop you already have rather than starting it over.
+presets that both reshape the crop and then hold it: a locked ratio constrains
+every subsequent drag, rather than shaping it once and letting go.
 **Applied** makes the crop the working image: zoom, the readout and the scopes
 all follow it, and the overlay goes away. Nothing is discarded — the source
 pixels are still there and switching back to **Overlay** is free.
@@ -163,11 +164,27 @@ takes effect next time rather than serving a stale copy. It's uploaded as a 3D
 texture and sampled trilinearly — precisely what the format describes, so the GPU
 does the interpolation the format was designed around.
 
-The LUT applies **after** the view transform, on display-encoded (sRGB) values,
-which is where a creative LUT expects to sit. **A LUT authored for log input —
-S-Log3, LogC, ACEScct — will not be correct here**, because Lupp has no matching
-input transform to put the data into that space first. That's a real limitation,
-not an oversight.
+### What the LUT is fed
+
+A `.cube` is a lookup with no idea what space its input is in — the author simply
+assumed one. Get it wrong and the LUT is applied to the wrong numbers, which
+looks like a bad grade rather than like a mistake. So the input is a setting:
+
+- **Display (sRGB)** — the usual creative LUT, applied after the view transform.
+- **S-Log3**, **LogC3 (ARRI)**, **ACEScct** — the LUT is fed log-encoded scene
+  values instead. A log LUT is almost always the display rendering itself (log
+  in, Rec.709 out), so choosing one means the LUT *replaces* the view transform
+  rather than sitting on top of it. Tone-mapping twice would be wrong.
+
+**The limit worth knowing:** these are transfer curves only. A LUT authored for
+S-Log3 usually also expects S-Gamut3 *primaries*, and nothing in an image file
+reliably says which primaries it holds — ImageIO reports Rec.709 for almost
+everything. So the curve will be right and the gamut may not be. For footage
+already in Rec.709 (most stills), the gamut matches and the result is correct.
+
+LUTs you add are **copied into `~/Library/Application Support/Lupp/LUTs`**, so
+the library keeps working after you tidy your Downloads folder. Removing an entry
+deletes the app's copy; your original is never touched.
 
 ## Camera RAW
 

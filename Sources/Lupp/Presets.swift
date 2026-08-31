@@ -88,6 +88,9 @@ enum PresetStore {
         set {
             guard let data = try? JSONEncoder().encode(newValue) else { return }
             UserDefaults.standard.set(data, forKey: key)
+            // Flushed rather than left to the periodic write: presets are work,
+            // and a force-quit shortly after saving one shouldn't lose it.
+            UserDefaults.standard.synchronize()
         }
     }
 
@@ -118,18 +121,77 @@ enum PresetStore {
     }
 }
 
-/// LUTs you've loaded, kept so they can be re-applied without hunting for the
-/// file again. Paths only — the cube itself is re-read on use, so editing a LUT
-/// on disk takes effect next time rather than serving a stale copy.
+/// LUTs you've added, copied into the app's own storage.
+///
+/// Copied rather than referenced: a library that points at wherever the file
+/// happened to be when you added it breaks the moment you tidy your Downloads
+/// folder, and does it silently. The copy is the app's, so removing an entry
+/// deletes it.
 enum LUTLibrary {
     private static let key = "lutLibrary"
 
-    static var paths: [String] {
-        get { UserDefaults.standard.stringArray(forKey: key) ?? [] }
-        set { UserDefaults.standard.set(newValue, forKey: key) }
+    /// `~/Library/Application Support/Lupp/LUTs`
+    static var storeDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
+        let dir = base.appendingPathComponent("Lupp/LUTs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
-    static func add(_ path: String) {
+    static func isInStore(_ path: String) -> Bool {
+        path.hasPrefix(storeDirectory.path + "/")
+    }
+
+    static var paths: [String] {
+        get { UserDefaults.standard.stringArray(forKey: key) ?? [] }
+        set {
+            UserDefaults.standard.set(newValue, forKey: key)
+            UserDefaults.standard.synchronize()
+        }
+    }
+
+    /// Copies the file in and returns where it now lives, or the original path if
+    /// the copy failed — better a working reference than a missing LUT.
+    @discardableResult
+    static func add(importing url: URL) -> String {
+        if isInStore(url.path) { register(url.path); return url.path }
+
+        let dir = storeDirectory
+        var dest = dir.appendingPathComponent(url.lastPathComponent)
+        // Same name, different file: keep both rather than overwriting someone's
+        // LUT with a namesake.
+        if FileManager.default.fileExists(atPath: dest.path),
+           !sameContents(url, dest) {
+            let stem = url.deletingPathExtension().lastPathComponent
+            let ext = url.pathExtension
+            var n = 2
+            repeat {
+                dest = dir.appendingPathComponent("\(stem) \(n).\(ext)")
+                n += 1
+            } while FileManager.default.fileExists(atPath: dest.path) && n < 100
+        }
+
+        if !FileManager.default.fileExists(atPath: dest.path) {
+            do { try FileManager.default.copyItem(at: url, to: dest) }
+            catch {
+                register(url.path)
+                return url.path
+            }
+        }
+        register(dest.path)
+        return dest.path
+    }
+
+    private static func sameContents(_ a: URL, _ b: URL) -> Bool {
+        let fm = FileManager.default
+        let sa = (try? fm.attributesOfItem(atPath: a.path)[.size] as? Int) ?? nil
+        let sb = (try? fm.attributesOfItem(atPath: b.path)[.size] as? Int) ?? nil
+        return sa != nil && sa == sb
+    }
+
+    private static func register(_ path: String) {
         var list = paths
         guard !list.contains(path) else { return }
         list.append(path)
@@ -139,8 +201,26 @@ enum LUTLibrary {
         }
     }
 
+    /// Removing an entry deletes the app's copy — it is ours, and leaving orphans
+    /// in Application Support is just a slower version of the mess this avoids.
+    /// Anything still pointing outside the store is only forgotten, never deleted.
     static func remove(_ path: String) {
         paths = paths.filter { $0 != path }
+        if isInStore(path) { try? FileManager.default.removeItem(atPath: path) }
+    }
+
+    /// Brings entries added before the store existed inside it, so the promise
+    /// holds for LUTs already in the library.
+    static func migrateStrays() {
+        for path in paths where !isInStore(path) {
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: path) else {
+                paths = paths.filter { $0 != path }
+                continue
+            }
+            let moved = add(importing: url)
+            if moved != path { paths = paths.filter { $0 != path } }
+        }
     }
 
     static func name(for path: String) -> String {

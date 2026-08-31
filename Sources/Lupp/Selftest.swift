@@ -388,6 +388,53 @@ enum Selftest {
               abs(Int(wp[2][0]) - 176) <= 2,
               detail: "grey became \(wp[2][0]), want ~176 (same as +1 EV)")
 
+        // Log encodings, checked at their published anchors: 18% scene grey maps
+        // to a documented code value in each. A curve that is subtly wrong looks
+        // like a bad LUT rather than like a bug, so it is worth pinning.
+        //
+        // Driven through an identity LUT, so what comes back is the encoding
+        // itself: a value in, its log code out.
+        let idURL = dir.appendingPathComponent("identity.cube")
+        var idLines = ["LUT_3D_SIZE 2"]
+        for b in 0..<2 { for g in 0..<2 { for r in 0..<2 {
+            idLines.append("\(r).0 \(g).0 \(b).0")
+        }}}
+        guard (try? idLines.joined(separator: "\n").write(to: idURL, atomically: true,
+                                                          encoding: .utf8)) != nil,
+              let idLUT = try? CubeLUT.parse(url: idURL), renderer.loadLUT(idLUT) else {
+            return fail("log LUT", "could not build identity cube")
+        }
+
+        // Regression: an identity cube must change nothing. It didn't — a cube's
+        // first and last entries are its endpoints, but a texture's first and last
+        // texel centres sit half a texel inside the edge, so addressing 0…1
+        // directly squeezed every LUT toward its middle. Small on a 64³ cube,
+        // ruinous on a small one, and invisible without a case like this.
+        var withIdentity = plain
+        withIdentity.lutAmount = 1
+        guard let iden = pixels(withIdentity) else { return fail("identity LUT", "export failed") }
+        let untouched = zip(p, iden).allSatisfy { a, b in
+            zip(a, b).allSatisfy { abs(Int($0) - Int($1)) <= 2 }
+        }
+        check("an identity LUT changes nothing", untouched,
+              detail: "grey \(p[2]) -> \(iden[2]), red \(p[0]) -> \(iden[0])")
+
+        // A mid-grey source: sRGB 128 decodes to linear 0.21586, close enough to
+        // 0.18 to compare against the published anchors with a loose tolerance.
+        for (input, expected, name) in [(LUTInput.sLog3, 0.42, "S-Log3"),
+                                        (LUTInput.logC3, 0.39, "LogC3"),
+                                        (LUTInput.acescct, 0.41, "ACEScct")] {
+            var d = plain
+            d.lutInput = input
+            d.lutAmount = 1
+            guard let out = pixels(d) else { return fail(name, "export failed") }
+            let got = Double(out[2][0]) / 255.0
+            check("\(name) puts mid grey near its published anchor",
+                  abs(got - expected) < 0.06,
+                  detail: String(format: "got %.3f, want ~%.2f", got, expected))
+        }
+        renderer.clearLUT()
+
         // Export end to end: render, write a real file, read it back and compare.
         // Covers the encode, the CGImage construction and the ImageIO write, none
         // of which the in-memory check above touches.

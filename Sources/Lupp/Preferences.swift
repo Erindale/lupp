@@ -56,6 +56,13 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: "lastExportExtension") }
     }
 
+    /// What encoding the LUT is fed. Sticky, because a given user's LUTs almost
+    /// always come from the same camera.
+    static var lutInput: Int {
+        get { UserDefaults.standard.integer(forKey: "lutInput") }
+        set { UserDefaults.standard.set(newValue, forKey: "lutInput") }
+    }
+
     /// Canvas and chrome backdrop, in sRGB.
     static var backgroundLevel: CGFloat {
         get {

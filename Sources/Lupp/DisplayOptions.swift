@@ -38,6 +38,33 @@ enum ViewTransform: Int, CaseIterable {
     }
 }
 
+/// What encoding a LUT expects to be fed.
+///
+/// A creative `.cube` is a lookup with no idea what space its input is in — the
+/// author simply assumed one. Get it wrong and the LUT is applied to the wrong
+/// numbers, which looks like a bad grade rather than like a mistake.
+///
+/// A log LUT is almost always a *display rendering*: log in, Rec.709 out. So
+/// choosing one here also means the LUT replaces the view transform rather than
+/// sitting on top of it — there is no sense in tone-mapping twice.
+enum LUTInput: Int, CaseIterable {
+    case display = 0     // sRGB-encoded, the usual creative LUT
+    case sLog3 = 1
+    case logC3 = 2
+    case acescct = 3
+
+    var label: String {
+        switch self {
+        case .display: return "Display (sRGB)"
+        case .sLog3:   return "S-Log3"
+        case .logC3:   return "LogC3 (ARRI)"
+        case .acescct: return "ACEScct"
+        }
+    }
+
+    var isLog: Bool { self != .display }
+}
+
 /// Which channel reaches the screen.
 enum ChannelView: Int, CaseIterable {
     case rgb = 0, red, green, blue, alpha, luma

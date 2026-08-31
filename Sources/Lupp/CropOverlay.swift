@@ -21,6 +21,11 @@ final class CropOverlayView: NSView {
     /// Size of the source in pixels, for reporting and for the loupe.
     var imagePixelSize: (() -> CGSize)?
 
+    /// Locked width/height in *pixels*, or nil for free. Held here rather than
+    /// only being applied when it is chosen: a ratio that shapes the crop once
+    /// and then lets you drag out of it isn't a constraint, it's a suggestion.
+    var aspect: Double?
+
     private enum Grip {
         case move
         case corner(x: Int, y: Int)   // -1 leading/top, +1 trailing/bottom
@@ -236,8 +241,10 @@ final class CropOverlayView: NSView {
             c.y = min(max(c.y + dy, 0), 1 - c.w)
         case .corner(let hx, let hy):
             applyEdge(&c, dx: dx, dy: dy, hx: hx, hy: hy, minSize: minSize)
+            applyAspect(&c, hx: hx, hy: hy)
         case .edge(let hx, let hy):
             applyEdge(&c, dx: dx, dy: dy, hx: hx, hy: hy, minSize: minSize)
+            applyAspect(&c, hx: hx, hy: hy)
         }
         crop = c
         onChange?(c)
@@ -285,6 +292,32 @@ final class CropOverlayView: NSView {
         } else if hy > 0 {
             c.w = min(max(c.w + dy, minSize), 1 - c.y)
         }
+    }
+
+    /// Force the locked ratio after a resize, anchored on whichever edge wasn't
+    /// being dragged so the crop grows away from the hand rather than sliding.
+    private func applyAspect(_ c: inout SIMD4<Float>, hx: Int, hy: Int) {
+        guard let a = aspect, let px = imagePixelSize?(),
+              px.width > 0, px.height > 0 else { return }
+        // The crop is normalised, so the ratio it needs is the pixel ratio
+        // divided by the image's own.
+        let ratio = Float(a / Double(px.width / px.height))
+        guard ratio > 0 else { return }
+
+        var w = c.z, h = c.w
+        // Horizontal handles lead with width, vertical with height; corners with
+        // width, since that is the axis the hand is usually thinking in.
+        if hx != 0 { h = w / ratio } else { w = h * ratio }
+        if w > 1 { w = 1; h = w / ratio }
+        if h > 1 { h = 1; w = h * ratio }
+
+        var x = c.x, y = c.y
+        if hx < 0 { x = (c.x + c.z) - w } else if hx == 0 { x = c.x + c.z / 2 - w / 2 }
+        if hy < 0 { y = (c.y + c.w) - h } else if hy == 0 { y = c.y + c.w / 2 - h / 2 }
+
+        c.z = w; c.w = h
+        c.x = min(max(x, 0), 1 - w)
+        c.y = min(max(y, 0), 1 - h)
     }
 
     override func mouseUp(with e: NSEvent) {
