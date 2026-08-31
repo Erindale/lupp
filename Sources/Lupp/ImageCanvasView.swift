@@ -27,7 +27,15 @@ final class ImageCanvasView: MTKView {
     var display = Renderer.DisplayState() {
         didSet {
             needsDisplay = true
-            cropOverlay.isHidden = !display.cropEnabled
+            // The overlay is for placing a crop; once applied there is nothing
+            // left outside it to show.
+            cropOverlay.isHidden = !display.cropEnabled || display.cropApplied
+            if oldValue.cropApplied != display.cropApplied
+                || oldValue.cropEnabled != display.cropEnabled {
+                needsInitialFit = true
+                applyInitialFitIfNeeded()
+                viewport.clamp(viewSize: bounds.size, imageSize: imageSize)
+            }
             if cropOverlay.crop != display.crop { cropOverlay.crop = display.crop }
             canvasDelegate?.canvasReadoutChanged(self)
             canvasDelegate?.canvasDisplayChanged(self)
@@ -37,10 +45,10 @@ final class ImageCanvasView: MTKView {
     /// Where the image quad currently sits in view coordinates. The crop overlay
     /// needs this to place itself; nothing else outside the canvas does.
     var imageViewRect: CGRect {
-        guard let i = image else { return .zero }
+        guard image != nil else { return .zero }
         return CGRect(x: viewport.origin.x, y: viewport.origin.y,
-                      width: CGFloat(i.width) * viewport.scale,
-                      height: CGFloat(i.height) * viewport.scale)
+                      width: imageSize.width * viewport.scale,
+                      height: imageSize.height * viewport.scale)
     }
 
     var exposureEV: Float {
@@ -102,6 +110,13 @@ final class ImageCanvasView: MTKView {
         registerForDraggedTypes([.fileURL])
 
         cropOverlay.imageRectProvider = { [weak self] in self?.imageViewRect ?? .zero }
+        cropOverlay.imagePixelSize = { [weak self] in
+            guard let i = self?.image else { return .zero }
+            return CGSize(width: i.width, height: i.height)
+        }
+        cropOverlay.loupeProvider = { [weak self] point, src, out in
+            self?.loupe(aroundImagePoint: point, sourcePixels: src, output: out)
+        }
         cropOverlay.onChange = { [weak self] c in
             guard let self else { return }
             self.display.crop = c
@@ -170,6 +185,16 @@ final class ImageCanvasView: MTKView {
         return renderer?.renderSampled(display: display, maxDimension: maxDimension)
     }
 
+    /// A magnified, graded patch of the source around a point, for the crop loupe.
+    func loupe(aroundImagePoint p: CGPoint, sourcePixels: Int, output: Int) -> CGImage? {
+        guard let i = image else { return nil }
+        let halfU = Float(sourcePixels) / Float(i.width) / 2
+        let halfV = Float(sourcePixels) / Float(i.height) / 2
+        let u = Float(p.x) / Float(i.width), v = Float(p.y) / Float(i.height)
+        return renderer?.renderWindow(uv: SIMD4(u - halfU, v - halfV, u + halfU, v + halfV),
+                                      width: output, height: output, display: display)
+    }
+
     /// The exported pixels come from the same shader as the screen's.
     func exportImage(bitDepth: Int) -> CGImage? {
         guard let img = image else { return nil }
@@ -199,9 +224,22 @@ final class ImageCanvasView: MTKView {
         canvasDelegate?.canvasReadoutChanged(self)
     }
 
+    /// The size the viewport works in: the crop once it has been applied,
+    /// otherwise the whole image. Zoom, fit and the readout all follow from this,
+    /// so applying a crop makes the app treat it as the picture.
     private var imageSize: CGSize {
         guard let i = image else { return .zero }
-        return CGSize(width: i.width, height: i.height)
+        let c = display.cropPixels(imageWidth: i.width, imageHeight: i.height)
+        return display.cropApplied && display.cropEnabled
+            ? CGSize(width: c.w, height: c.h)
+            : CGSize(width: i.width, height: i.height)
+    }
+
+    /// Offset from the working image's origin to the source's, in source pixels.
+    private var cropOrigin: (x: Int, y: Int) {
+        guard let i = image, display.cropApplied, display.cropEnabled else { return (0, 0) }
+        let c = display.cropPixels(imageWidth: i.width, imageHeight: i.height)
+        return (c.x, c.y)
     }
 
     // MARK: - Zoom commands
@@ -437,7 +475,10 @@ final class ImageCanvasView: MTKView {
         guard let img = image, let wp = windowPoint else { return }
         let p = convert(wp, from: nil)
         let ip = viewport.imagePoint(fromView: p)
-        let x = Int(floor(ip.x)), y = Int(floor(ip.y))
+        // Report source coordinates even when a crop is applied — the numbers
+        // should say where the pixel is in the file, not in the current view of it.
+        let o = cropOrigin
+        let x = Int(floor(ip.x)) + o.x, y = Int(floor(ip.y)) + o.y
         if let v = img.sample(x: x, y: y) {
             cursorPixel = (x, y)
             cursorValue = v

@@ -247,8 +247,15 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             }
             self.canvas.display = d
         }
+        grade.onCropApply = { [weak self] applied in
+            self?.canvas.display.cropApplied = applied
+        }
         grade.onCropReset = { [weak self] in
-            self?.canvas.display.crop = SIMD4<Float>(0, 0, 1, 1)
+            guard let self else { return }
+            var d = self.canvas.display
+            d.crop = SIMD4<Float>(0, 0, 1, 1)
+            d.cropApplied = false
+            self.canvas.display = d
         }
         grade.onCropAspect = { [weak self] aspect in
             guard let self, let img = self.canvas.image else { return }

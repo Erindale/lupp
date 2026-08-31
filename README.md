@@ -98,15 +98,23 @@ with the reference transforms.
 The colour panel reads top to bottom in the order the pixels travel: light, then
 the cube warp, then a LUT on top, then what to do with the result.
 
-**Every section has a `0|1` bypass** beside its title, and there's a master one at
-the top (`B`). A bypassed section keeps its values and simply stops being applied,
-so comparing costs nothing and switching back returns exactly where you were —
-and you can isolate one change at a time rather than judging the whole grade at
-once. A two-segment switch rather than a tick box: 0/1 reads as a signal path
-being broken and remade, which is what a bypass is.
+**Every section has a bypass** beside its title, and there's a master one at the
+top (`B`). Lit means applied, dimmed means bypassed. A bypassed section keeps its
+values and simply stops being applied, so comparing costs nothing and switching
+back returns exactly where you were — and you can isolate one change at a time
+rather than judging the whole grade at once.
+
+**Hold Shift while dragging** any slider to move it at a tenth speed. On the crop
+it does the same and adds a magnifier at the edge you're placing, with its pixel
+coordinate — the difference between being able to set a value and having to type
+it.
 
 **Crop** — drag the rectangle on the image, with rule-of-thirds guides and aspect
 presets that refine the crop you already have rather than starting it over.
+**Applied** makes the crop the working image: zoom, the readout and the scopes
+all follow it, and the overlay goes away. Nothing is discarded — the source
+pixels are still there and switching back to **Overlay** is free.
+
 Export writes the crop **at its own pixel size**, not the whole frame with the
 edges painted out. It's a window into the source texture, so a cropped export
 goes through the same shader as everything else.

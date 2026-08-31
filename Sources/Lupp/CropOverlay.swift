@@ -15,6 +15,11 @@ final class CropOverlayView: NSView {
     /// which owns the viewport.
     var imageRectProvider: (() -> CGRect)?
     var onChange: ((SIMD4<Float>) -> Void)?
+    /// Renders a magnified, graded patch of the source around a point in image
+    /// pixels. Supplied by the canvas.
+    var loupeProvider: ((CGPoint, Int, Int) -> CGImage?)?
+    /// Size of the source in pixels, for reporting and for the loupe.
+    var imagePixelSize: (() -> CGSize)?
 
     private enum Grip {
         case move
@@ -25,6 +30,14 @@ final class CropOverlayView: NSView {
     private var drag: (grip: Grip, startCrop: SIMD4<Float>, startPoint: CGPoint)?
     private static let handle: CGFloat = 9
     private static let grabSlop: CGFloat = 11
+
+    /// Shift slows the drag to a tenth and puts a magnifier under the cursor —
+    /// the two halves of the same intent: place this edge exactly.
+    static let fineFactor: Float = 0.1
+    private static let loupeSize: CGFloat = 132
+    private static let loupeSourcePixels = 48
+
+    private var loupe: (image: CGImage, at: CGPoint, pixel: CGPoint)?
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -84,6 +97,52 @@ final class CropOverlayView: NSView {
                                              height: CropOverlayView.handle),
                          xRadius: 1.5, yRadius: 1.5).fill()
         }
+
+        drawLoupe()
+    }
+
+    private func drawLoupe() {
+        guard let l = loupe, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let size = CropOverlayView.loupeSize
+        // Kept inside the view, and nudged off the cursor so it isn't sitting
+        // under the very edge being placed.
+        var origin = CGPoint(x: l.at.x + 18, y: l.at.y + 18)
+        origin.x = min(max(origin.x, 4), bounds.maxX - size - 4)
+        origin.y = min(max(origin.y, 4), bounds.maxY - size - 22)
+        let frame = CGRect(x: origin.x, y: origin.y, width: size, height: size)
+
+        ctx.saveGState()
+        let clip = NSBezierPath(roundedRect: frame, xRadius: 5, yRadius: 5)
+        clip.addClip()
+        ctx.interpolationQuality = .none          // show pixels, not a blur of them
+        ctx.draw(l.image, in: frame)
+        ctx.restoreGState()
+
+        // Crosshair on the exact point being placed.
+        NSColor.white.withAlphaComponent(0.85).setStroke()
+        let cross = NSBezierPath()
+        cross.move(to: NSPoint(x: frame.midX, y: frame.minY))
+        cross.line(to: NSPoint(x: frame.midX, y: frame.maxY))
+        cross.move(to: NSPoint(x: frame.minX, y: frame.midY))
+        cross.line(to: NSPoint(x: frame.maxX, y: frame.midY))
+        cross.lineWidth = 1
+        cross.stroke()
+
+        NSColor.white.withAlphaComponent(0.85).setStroke()
+        clip.lineWidth = 1
+        clip.stroke()
+
+        let text = "\(Int(l.pixel.x)), \(Int(l.pixel.y))" as NSString
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        let ts = text.size(withAttributes: attrs)
+        let label = CGRect(x: frame.midX - ts.width / 2 - 4, y: frame.maxY + 3,
+                           width: ts.width + 8, height: ts.height + 2)
+        NSColor.black.withAlphaComponent(0.6).setFill()
+        NSBezierPath(roundedRect: label, xRadius: 3, yRadius: 3).fill()
+        text.draw(at: NSPoint(x: label.minX + 4, y: label.minY + 1), withAttributes: attrs)
     }
 
     private func handlePoints(in c: CGRect) -> [CGPoint] {
@@ -150,13 +209,23 @@ final class CropOverlayView: NSView {
         let img = imageRect
         guard img.width > 1, img.height > 1 else { return }
         let p = convert(e.locationInWindow, from: nil)
-        let dx = Float((p.x - d.startPoint.x) / img.width)
-        let dy = Float((p.y - d.startPoint.y) / img.height)
+        var dx = Float((p.x - d.startPoint.x) / img.width)
+        var dy = Float((p.y - d.startPoint.y) / img.height)
+
+        // Shift slows the drag to a tenth: the pointer and the edge stop moving
+        // together, which is the point — the edge can be placed finer than the
+        // hand can hold still.
+        let fine = e.modifierFlags.contains(.shift)
+        if fine {
+            dx *= CropOverlayView.fineFactor
+            dy *= CropOverlayView.fineFactor
+        }
 
         var c = d.startCrop
         // Never smaller than a pixel or two of the source, or the handles end up
         // on top of each other and it can't be recovered by dragging.
         let minSize: Float = 0.01
+
 
         switch d.grip {
         case .move:
@@ -169,6 +238,32 @@ final class CropOverlayView: NSView {
         }
         crop = c
         onChange?(c)
+        updateLoupe(showing: fine, grip: d.grip, at: p)
+    }
+
+    /// The magnifier follows the edge being moved, not the pointer: with a fine
+    /// drag the two are no longer in the same place, and it is the edge you are
+    /// trying to see.
+    private func updateLoupe(showing: Bool, grip: Grip, at pointer: CGPoint) {
+        guard showing, let px = imagePixelSize?(), px.width > 0 else {
+            if loupe != nil { loupe = nil; needsDisplay = true }
+            return
+        }
+        let c = crop
+        var nx = c.x + c.z / 2, ny = c.y + c.w / 2
+        switch grip {
+        case .move: break
+        case .corner(let hx, let hy), .edge(let hx, let hy):
+            if hx < 0 { nx = c.x } else if hx > 0 { nx = c.x + c.z }
+            if hy < 0 { ny = c.y } else if hy > 0 { ny = c.y + c.w }
+        }
+        let pixel = CGPoint(x: CGFloat(nx) * px.width, y: CGFloat(ny) * px.height)
+        let scale = Int(NSScreen.main?.backingScaleFactor ?? 2)
+        if let img = loupeProvider?(pixel, CropOverlayView.loupeSourcePixels,
+                                    Int(CropOverlayView.loupeSize) * scale) {
+            loupe = (img, pointer, pixel)
+        }
+        needsDisplay = true
     }
 
     private func applyEdge(_ c: inout SIMD4<Float>, dx: Float, dy: Float,
@@ -191,6 +286,8 @@ final class CropOverlayView: NSView {
 
     override func mouseUp(with e: NSEvent) {
         drag = nil
+        loupe = nil
+        needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
 }

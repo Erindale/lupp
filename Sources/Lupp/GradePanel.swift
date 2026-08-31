@@ -27,13 +27,13 @@ final class GradePanel: SidePanel {
     /// Aspect ratio as width/height, or nil for free.
     var onCropAspect: ((Double?) -> Void)?
     var onCropReset: (() -> Void)?
+    var onCropApply: ((Bool) -> Void)?
 
     private let lutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let lutButtons = NSSegmentedControl(labels: ["Add…", "Remove", "Off"],
                                                 trackingMode: .momentary, target: nil, action: nil)
     private let lutLabel = ThemedLabel("No LUT", role: .tertiary, size: 9)
-    private let lutSlider = NSSlider(value: 100, minValue: 0, maxValue: 100,
-                                     target: nil, action: nil)
+    private let lutSlider = FineSlider()
 
     private lazy var blackRow = LabelledSliderRow(label: "Black point", initial: 0, span: 0.4)
     private lazy var whiteRow = LabelledSliderRow(label: "White point", initial: 1, span: 0.6)
@@ -47,8 +47,7 @@ final class GradePanel: SidePanel {
         LabelledSliderRow(label: "Blue", initial: 1, span: 0.5),
     ]
     private var tetraRows: [TetraSliderRow] = []
-    private let tetraAmount = NSSlider(value: 100, minValue: 0, maxValue: 100,
-                                       target: nil, action: nil)
+    private let tetraAmount = FineSlider()
     private let savePresetButton = NSButton(title: "Save Preset…", target: nil, action: nil)
 
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -62,6 +61,9 @@ final class GradePanel: SidePanel {
     private var cropHeader: SectionHeader!
     private let cropAspect = NSPopUpButton(frame: .zero, pullsDown: false)
     private lazy var cropSize = caption("Whole image")
+    private let cropApply = NSSegmentedControl(labels: ["Overlay", "Applied"],
+                                               trackingMode: .selectOne,
+                                               target: nil, action: nil)
 
     /// Width/height, nil meaning free.
     private static let aspects: [(String, Double?)] = [
@@ -82,6 +84,7 @@ final class GradePanel: SidePanel {
         style(lutButtons, size: .small, font: 10)
         lutButtons.target = self
         lutButtons.action = #selector(lutButtonPressed(_:))
+        lutSlider.minValue = 0; lutSlider.maxValue = 100; lutSlider.doubleValue = 100
         style(lutSlider)
         lutSlider.target = self
         lutSlider.action = #selector(lutAmountChanged(_:))
@@ -94,6 +97,7 @@ final class GradePanel: SidePanel {
             r.onChange = { [weak self] in self?.lightChanged() }
         }
         let tetraRowViews = buildTetraRows()
+        tetraAmount.minValue = 0; tetraAmount.maxValue = 100; tetraAmount.doubleValue = 100
         style(tetraAmount)
         tetraAmount.target = self
         tetraAmount.action = #selector(tetraChanged(_:))
@@ -143,6 +147,10 @@ final class GradePanel: SidePanel {
         cropAspect.target = self
         cropAspect.action = #selector(cropAspectChanged(_:))
         for (name, _) in GradePanel.aspects { cropAspect.addItem(withTitle: name) }
+        style(cropApply, size: .small, font: 10)
+        cropApply.selectedSegment = 0
+        cropApply.target = self
+        cropApply.action = #selector(cropApplyChanged(_:))
 
         lutHeader = sectionHeader("LUT",
                                   toggle: { [weak self] on in
@@ -156,7 +164,7 @@ final class GradePanel: SidePanel {
 
         var column: [NSView] = [
             masterHeader,
-            caption("Each 0|1 bypasses its section without discarding it — switch back and you are exactly where you were."),
+            caption("The power icon on each section bypasses it without discarding anything — switch back and you are exactly where you were. Shift while dragging any slider moves it at a tenth speed."),
             separator(),
             lightHeader, blackRow, whiteRow, exposureRow, contrastRow, pivotRow,
             wbHeader, wbRows[0], wbRows[1], wbRows[2],
@@ -170,8 +178,8 @@ final class GradePanel: SidePanel {
         // Order down the panel is the order the pixels travel: light, then the
         // cube warp, then the LUT on top, then what to do with the result.
         column += [separator(),
-                   cropHeader, cropAspect, cropSize,
-                   caption("Drag the rectangle on the image. Export writes the crop at its own pixel size, not the whole frame with the edges painted out."),
+                   cropHeader, cropAspect, cropApply, cropSize,
+                   caption("Drag the rectangle on the image; hold Shift for a tenth-speed drag with a magnifier. Applied makes the crop the working image — zoom, scopes and readout all follow it — without touching the source, so switching back to Overlay costs nothing. Export writes the crop at its own pixel size either way."),
                    separator(),
                    lutHeader, lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
                    separator(),
@@ -185,7 +193,7 @@ final class GradePanel: SidePanel {
         wide += [tetraAmount, tetraNote, lightNote, savePresetButton] as [NSView]
         wide += [presetPopup, presetButtons, exportButton, exportNote] as [NSView]
         wide += [masterHeader, lightHeader, wbHeader, tetraHeader, lutHeader] as [NSView]
-        wide += [cropHeader, cropAspect, cropSize] as [NSView]
+        wide += [cropHeader, cropAspect, cropApply, cropSize] as [NSView]
         wide += tetraRowViews
         wide += lightRows as [NSView]
         wide += balanceRows as [NSView]
@@ -242,6 +250,10 @@ final class GradePanel: SidePanel {
         tetraAmount.doubleValue = 100
         lightChanged()
         tetraChanged(nil)
+    }
+
+    @objc private func cropApplyChanged(_ sender: NSSegmentedControl) {
+        emit { onCropApply?(sender.selectedSegment == 1) }
     }
 
     @objc private func cropAspectChanged(_ sender: NSPopUpButton) {
@@ -345,6 +357,8 @@ final class GradePanel: SidePanel {
         // none of them is the control being clicked.
         masterHeader.isOn = display.gradeEnabled
         cropHeader.isOn = display.cropEnabled
+        cropApply.isEnabled = display.cropEnabled
+        if !handlingControlAction { cropApply.selectedSegment = display.cropApplied ? 1 : 0 }
         lightHeader.isOn = display.lightOn
         wbHeader.isOn = display.whiteBalanceOn
         tetraHeader.isOn = display.tetraOn

@@ -194,27 +194,36 @@ class SidePanel: NSView {
     }
 }
 
-/// A section title row: the title, a small [0|1] bypass switch, and a reset.
+/// A section title row: the title, a bypass toggle, and a reset.
 ///
-/// A two-segment switch rather than a checkbox: a tick reads as "this option is
-/// on", while 0/1 reads as a signal path being broken and remade, which is what
-/// a bypass is. It also sits in the same visual language as the rest of the
-/// panel's segmented controls.
+/// A single power glyph rather than a checkbox or a pair of segments — a tick
+/// reads as "this option is on" and a two-segment control takes width the header
+/// hasn't got. Lit means the section is applied, dimmed means bypassed, which is
+/// legible at a glance while comparing.
 final class SectionHeader: NSView {
-    private let bypass: NSSegmentedControl?
+    private let bypass: ActionButton?
     private let label: ThemedLabel
     private var toggleHandler: ((Bool) -> Void)?
 
+    private var on = true
+
     var isOn: Bool {
-        get { bypass.map { $0.selectedSegment == 1 } ?? true }
-        set { bypass?.selectedSegment = newValue ? 1 : 0 }
+        get { bypass == nil ? true : on }
+        set { on = newValue; refreshBypass() }
+    }
+
+    private func refreshBypass() {
+        guard let bypass else { return }
+        bypass.image = NSImage(systemSymbolName: on ? "power" : "power.circle",
+                               accessibilityDescription: on ? "On" : "Bypassed")?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: on ? .semibold : .regular))
+        bypass.contentTintColor = on ? Theme.text(.primary) : Theme.text(.tertiary)
+        bypass.alphaValue = on ? 1 : 0.55
     }
 
     init(title: String, toggle: ((Bool) -> Void)?, reset: @escaping () -> Void) {
         label = ThemedLabel(title, role: .tertiary, size: 9, weight: .semibold)
-        bypass = toggle == nil ? nil
-            : NSSegmentedControl(labels: ["0", "1"], trackingMode: .selectOne,
-                                 target: nil, action: nil)
+        bypass = toggle == nil ? nil : ActionButton(action: {})
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         toggleHandler = toggle
@@ -231,11 +240,9 @@ final class SectionHeader: NSView {
 
         var views: [NSView] = [label, resetButton]
         if let bypass {
-            bypass.segmentStyle = .rounded
-            bypass.controlSize = .mini
-            bypass.font = .systemFont(ofSize: 9, weight: .medium)
-            bypass.selectedSegment = 1
-            bypass.selectedSegmentBezelColor = Theme.controlFill
+            bypass.isBordered = false
+            bypass.bezelStyle = .texturedRounded
+            bypass.imagePosition = .imageOnly
             bypass.target = self
             bypass.action = #selector(toggled)
             bypass.toolTip = "Bypass \(title.lowercased()) — compare with and without"
@@ -257,18 +264,24 @@ final class SectionHeader: NSView {
         ]
         if let bypass {
             c += [
-                bypass.trailingAnchor.constraint(equalTo: resetButton.leadingAnchor, constant: -6),
+                bypass.trailingAnchor.constraint(equalTo: resetButton.leadingAnchor, constant: -4),
                 bypass.centerYAnchor.constraint(equalTo: centerYAnchor),
-                bypass.widthAnchor.constraint(equalToConstant: 40),
+                bypass.widthAnchor.constraint(equalToConstant: 16),
+                bypass.heightAnchor.constraint(equalToConstant: 14),
                 bypass.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
             ]
         }
         NSLayoutConstraint.activate(c)
+        refreshBypass()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    @objc private func toggled() { toggleHandler?(isOn) }
+    @objc private func toggled() {
+        on.toggle()
+        refreshBypass()
+        toggleHandler?(on)
+    }
 }
 
 /// An NSButton that carries its own closure, so callers don't each need a
@@ -328,6 +341,47 @@ enum ThemeRefresh {
         if let b = view as? ActionButton { b.contentTintColor = Theme.text(.tertiary) }
         view.needsDisplay = true
         for sub in view.subviews { apply(to: sub) }
+    }
+}
+
+/// A slider whose drag can be slowed down.
+///
+/// Holding Shift moves it at a tenth speed, which is the difference between
+/// being able to set a value and having to type it. AppKit's own tracking maps
+/// the pointer straight to a position with no notion of a rate, so this replaces
+/// it with a loop that works in deltas — and reads the modifier live, so Shift
+/// can be pressed part-way through a drag.
+final class FineSlider: NSSlider {
+    static let fineFactor = 0.1
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        let knobWidth = (cell as? NSSliderCell)?
+            .knobRect(flipped: isFlipped).width ?? 12
+        let travel = max(bounds.width - knobWidth, 1)
+        let range = maxValue - minValue
+
+        var last = convert(event.locationInWindow, from: nil)
+
+        // Clicking the track jumps to that position first, as it normally would;
+        // from then on it is all relative so the rate can be scaled.
+        let knob = (cell as? NSSliderCell)?.knobRect(flipped: isFlipped) ?? .zero
+        if !knob.insetBy(dx: -2, dy: -2).contains(last) {
+            let f = min(max((last.x - knobWidth / 2) / travel, 0), 1)
+            doubleValue = minValue + f * range
+            sendAction(action, to: target)
+        }
+
+        while let e = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if e.type == .leftMouseUp { break }
+            let p = convert(e.locationInWindow, from: nil)
+            var dx = p.x - last.x
+            last = p
+            if e.modifierFlags.contains(.shift) { dx *= FineSlider.fineFactor }
+            doubleValue = min(max(doubleValue + Double(dx) / Double(travel) * range,
+                                  minValue), maxValue)
+            sendAction(action, to: target)
+        }
     }
 }
 

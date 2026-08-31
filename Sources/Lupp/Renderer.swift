@@ -108,6 +108,18 @@ final class Renderer {
         var cropEnabled = false
         var crop = SIMD4<Float>(0, 0, 1, 1)   // x, y, w, h
 
+        /// Applied: the crop becomes the working image. The source pixels are
+        /// still there — nothing is discarded and reverting is free — but zoom,
+        /// the readout, the scopes and the export all now describe the crop,
+        /// rather than the crop being an overlay you have to keep reading past.
+        var cropApplied = false
+
+        /// The window into the source that the canvas should draw.
+        var uvWindow: SIMD4<Float> {
+            guard cropEnabled, cropApplied else { return SIMD4(0, 0, 1, 1) }
+            return SIMD4(crop.x, crop.y, crop.x + crop.z, crop.y + crop.w)
+        }
+
         /// The crop in pixels, for the export and the readout.
         func cropPixels(imageWidth w: Int, imageHeight h: Int) -> (x: Int, y: Int, w: Int, h: Int) {
             guard cropEnabled else { return (0, 0, w, h) }
@@ -293,7 +305,8 @@ final class Renderer {
 
             var u = uniforms(for: display, rect: rect,
                              checkerSize: Float(12 * backingScale),
-                             showChecker: 1, encodeOutput: 0)
+                             showChecker: 1, encodeOutput: 0,
+                             uvRect: display.uvWindow)
             enc.setRenderPipelineState(pipeline)
             var tetra = display.tetra
             enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -416,7 +429,8 @@ final class Renderer {
               let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
 
         var u = uniforms(for: display, rect: SIMD4<Float>(-1, -1, 1, 1),
-                         checkerSize: 1, showChecker: 0, encodeOutput: 1)
+                         checkerSize: 1, showChecker: 0, encodeOutput: 1,
+                         uvRect: display.uvWindow)
         var tetra = display.tetra
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -444,6 +458,54 @@ final class Renderer {
         var out = [Float](repeating: 0, count: w * h * 4)
         for i in 0..<out.count { out[i] = Float(Float16(bitPattern: half[i])) }
         return (out, w, h)
+    }
+
+    /// A graded render of an arbitrary window into the source, used by the crop
+    /// loupe. Goes through the same shader, so the magnifier shows the picture as
+    /// it actually is rather than the ungraded file underneath it.
+    func renderWindow(uv: SIMD4<Float>, width: Int, height: Int,
+                      display: DisplayState) -> CGImage? {
+        guard let source = texture, width > 0, height > 0 else { return nil }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
+        desc.usage = [.renderTarget, .shaderRead]
+        let unified = device.hasUnifiedMemory
+        desc.storageMode = unified ? .shared : .managed
+        guard let target = device.makeTexture(descriptor: desc) else { return nil }
+
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+
+        guard let cmd = queue.makeCommandBuffer(),
+              let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+        var u = uniforms(for: display, rect: SIMD4<Float>(-1, -1, 1, 1),
+                         checkerSize: 1, showChecker: 0, encodeOutput: 1, uvRect: uv)
+        var tetra = display.tetra
+        enc.setRenderPipelineState(pipeline)
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
+        enc.setFragmentBytes(&tetra, length: MemoryLayout<TetraCorners>.stride, index: 1)
+        enc.setFragmentTexture(source, index: 0)
+        enc.setFragmentTexture(lutTexture ?? identityLUT, index: 1)
+        enc.setFragmentSamplerState(nearest, index: 0)
+        if let lutSampler { enc.setFragmentSamplerState(lutSampler, index: 1) }
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        enc.endEncoding()
+        if !unified, let blit = cmd.makeBlitCommandEncoder() {
+            blit.synchronize(resource: target); blit.endEncoding()
+        }
+        cmd.commit()
+        cmd.waitUntilCompleted()
+
+        var half = [UInt16](repeating: 0, count: width * height * 4)
+        half.withUnsafeMutableBytes { raw in
+            target.getBytes(raw.baseAddress!, bytesPerRow: width * 8,
+                            from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        }
+        return Renderer.cgImage(fromHalf: half, width: width, height: height, bitDepth: 8)
     }
 
     /// One place that builds the uniform block, so the screen, the export and the

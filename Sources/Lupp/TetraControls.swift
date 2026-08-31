@@ -9,7 +9,7 @@ import simd
 /// in the reds", "a third of a stop down" — and the value needs to be readable
 /// and typeable while you do it.
 class LabelledSliderRow: NSView {
-    private let slider = NSSlider()
+    private let slider = FineSlider()
     private let field = NSTextField()
     var onChange: (() -> Void)?
 
