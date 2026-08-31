@@ -4,13 +4,28 @@ import simd
 /// Right-hand diagnostics panel: histogram, RGB parade, vectorscope, statistics.
 final class ScopesPanel: NSView {
     private let histogram = ScopeView(title: "Histogram", heightRatio: 0.42)
-    private let parade = ScopeView(title: "RGB Parade", heightRatio: 0.42)
+    private let paradeMode = NSSegmentedControl(labels: ["Split", "Combined"],
+                                                trackingMode: .selectOne, target: nil, action: nil)
+    private lazy var parade = ScopeView(title: "RGB Parade", heightRatio: 0.42,
+                                        accessory: paradeMode)
     private let vectorscope = VectorscopeView(title: "Vectorscope", heightRatio: 1)
     private let stats = NSTextField(labelWithString: "")
     private let note = NSTextField(labelWithString: "Scopes read sRGB-encoded values.")
 
+    /// Held so switching parade mode is instant — both rasters already exist.
+    private var current: Scopes?
+
     init() {
         super.init(frame: .zero)
+        paradeMode.segmentStyle = .rounded
+        paradeMode.controlSize = .mini
+        paradeMode.font = .systemFont(ofSize: 9)
+        paradeMode.selectedSegment = Preferences.paradeCombined ? 1 : 0
+        paradeMode.target = self
+        paradeMode.action = #selector(paradeModeChanged(_:))
+        // Neutral rather than the system accent: in a scopes panel a saturated
+        // highlight reads as a colour cue about the image, not about the control.
+        paradeMode.selectedSegmentBezelColor = NSColor(white: 0.42, alpha: 1)
         wantsLayer = true
         layer?.backgroundColor = Theme.background.cgColor
 
@@ -34,7 +49,9 @@ final class ScopesPanel: NSView {
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        let doc = NSView()
+        // Flipped: an NSScrollView's document view is bottom-origin by default,
+        // which pins short content to the bottom of the panel instead of the top.
+        let doc = FlippedView()
         doc.translatesAutoresizingMaskIntoConstraints = false
         doc.addSubview(stack)
         scroll.documentView = doc
@@ -62,10 +79,21 @@ final class ScopesPanel: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func update(with s: Scopes?, image: FloatImage?) {
+        current = s
         histogram.content = s?.histogram
-        parade.content = s?.parade
         vectorscope.content = s?.vectorscope
+        applyParadeMode()
         stats.stringValue = s.map { text(for: $0, image: image) } ?? "No image."
+    }
+
+    @objc private func paradeModeChanged(_ sender: NSSegmentedControl) {
+        Preferences.paradeCombined = sender.selectedSegment == 1
+        applyParadeMode()
+    }
+
+    private func applyParadeMode() {
+        parade.content = Preferences.paradeCombined ? current?.paradeCombined
+                                                    : current?.paradeSplit
     }
 
     private func text(for s: Scopes, image: FloatImage?) -> String {
@@ -96,6 +124,10 @@ final class ScopesPanel: NSView {
     }
 }
 
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 // MARK: - Scope views
 
 private class ScopeView: NSView {
@@ -103,7 +135,7 @@ private class ScopeView: NSView {
     private let heightRatio: CGFloat
     var content: CGImage? { didSet { needsDisplay = true } }
 
-    init(title: String, heightRatio: CGFloat) {
+    init(title: String, heightRatio: CGFloat, accessory: NSView? = nil) {
         self.heightRatio = heightRatio
         label = NSTextField(labelWithString: title.uppercased())
         super.init(frame: .zero)
@@ -117,6 +149,15 @@ private class ScopeView: NSView {
             label.leadingAnchor.constraint(equalTo: leadingAnchor),
             heightAnchor.constraint(equalTo: widthAnchor, multiplier: heightRatio, constant: 18),
         ])
+
+        if let accessory {
+            accessory.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(accessory)
+            NSLayoutConstraint.activate([
+                accessory.trailingAnchor.constraint(equalTo: trailingAnchor),
+                accessory.centerYAnchor.constraint(equalTo: label.centerYAnchor),
+            ])
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }

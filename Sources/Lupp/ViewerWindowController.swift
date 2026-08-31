@@ -123,7 +123,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     private func applyScopesVisibility(animated: Bool) {
         let target: CGFloat = scopesOpen ? Theme.panelWidth : 0
-        scopesButton.contentTintColor = scopesOpen ? .controlAccentColor : .secondaryLabelColor
+        // Grey when closed, white when open — the accent colour read as an alert
+        // rather than as a state, which is not what a view toggle should say.
+        scopesButton.contentTintColor = scopesOpen ? .labelColor : .secondaryLabelColor
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.16

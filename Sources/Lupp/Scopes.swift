@@ -14,7 +14,12 @@ import simd
 /// them per frame would make panning cost as much as loading.
 struct Scopes {
     let histogram: CGImage
-    let parade: CGImage
+    /// Three side-by-side channel panels.
+    let paradeSplit: CGImage
+    /// All three channels superimposed on one plot, as Resolve's combined view.
+    /// Both are rasterised in the same pass — the second accumulation is cheap
+    /// next to the walk over the pixels, and switching should be instant.
+    let paradeCombined: CGImage
     let vectorscope: CGImage
     let stats: Stats
 
@@ -42,6 +47,8 @@ struct Scopes {
 
         let pw = 168, ph = 256                       // one parade panel
         var parade = [Float](repeating: 0, count: pw * ph * 3)
+        let cw = 512                                 // combined parade, full width
+        var combined = [Float](repeating: 0, count: cw * ph * 3)
 
         let vs = 256
         var vector = [Float](repeating: 0, count: vs * vs)
@@ -77,9 +84,11 @@ struct Scopes {
             // Parade: image column -> panel column, value -> row.
             let x = i % w
             let px = min(pw - 1, x * pw / w)
+            let cx = min(cw - 1, x * cw / w)
             for c in 0..<3 {
                 let row = min(ph - 1, max(0, Int((1 - e[c]) * Float(ph - 1))))
                 parade[(c * ph + row) * pw + px] += 1
+                combined[(c * ph + row) * cw + cx] += 1
             }
 
             // Vectorscope: BT.709 chroma of the display-encoded value.
@@ -100,8 +109,10 @@ struct Scopes {
 
         guard let h = renderHistogram(hist, bins: bins),
               let pa = renderParade(parade, width: pw, height: ph),
+              let co = renderCombinedParade(combined, width: cw, height: ph),
               let v = renderVectorscope(vector, size: vs) else { return nil }
-        return Scopes(histogram: h, parade: pa, vectorscope: v, stats: stats)
+        return Scopes(histogram: h, paradeSplit: pa, paradeCombined: co,
+                      vectorscope: v, stats: stats)
     }
 
     // MARK: - Rasterisers
@@ -152,6 +163,34 @@ struct Scopes {
                     px[o + c] = UInt8(Swift.min(255, Swift.max(0, t * 255 * 1.6)))
                     px[o + 3] = 255
                 }
+            }
+        }
+        return makeImage(&px, w, h)
+    }
+
+    /// All three channels on one plot, additively — where they agree the trace
+    /// goes white, which is what makes a neutral image instantly readable as
+    /// neutral. Normalised against a single shared peak so the channels stay
+    /// comparable to each other rather than each being stretched to full range.
+    private static func renderCombinedParade(_ acc: [Float], width w: Int, height h: Int) -> CGImage? {
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+
+        var peak: Float = 1
+        for v in acc { peak = Swift.max(peak, v) }
+        let denom = log(1 + peak)
+
+        for y in 0..<h {
+            for x in 0..<w {
+                var any = false
+                let o = (y * w + x) * 4
+                for c in 0..<3 {
+                    let n = acc[(c * h + y) * w + x]
+                    if n <= 0 { continue }
+                    any = true
+                    let t = log(1 + n) / denom
+                    px[o + c] = UInt8(Swift.min(255, Swift.max(0, t * 255 * 1.6)))
+                }
+                if any { px[o + 3] = 255 }
             }
         }
         return makeImage(&px, w, h)

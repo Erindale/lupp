@@ -22,6 +22,13 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: "scopesPanelOpen") }
     }
 
+    /// Parade drawn as one superimposed plot (Resolve's combined view) rather
+    /// than three side-by-side panels.
+    static var paradeCombined: Bool {
+        get { UserDefaults.standard.bool(forKey: "paradeCombined") }
+        set { UserDefaults.standard.set(newValue, forKey: "paradeCombined") }
+    }
+
     /// Windows share one autosaved frame, so a new image opens at whatever size
     /// you were last working at and scales to fit it — rather than the window
     /// jumping to the image's dimensions every time you open a bigger file.
