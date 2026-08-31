@@ -67,9 +67,9 @@ class LabelledSliderRow: NSView {
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 20),
+            heightAnchor.constraint(equalToConstant: Theme.scaled(20)),
             name.leadingAnchor.constraint(equalTo: leadingAnchor),
-            name.widthAnchor.constraint(equalToConstant: 84),
+            name.widthAnchor.constraint(equalToConstant: Theme.scaled(84)),
             name.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             slider.leadingAnchor.constraint(equalTo: name.trailingAnchor, constant: 6),
@@ -77,7 +77,7 @@ class LabelledSliderRow: NSView {
 
             field.leadingAnchor.constraint(equalTo: slider.trailingAnchor, constant: 6),
             field.trailingAnchor.constraint(equalTo: trailingAnchor),
-            field.widthAnchor.constraint(equalToConstant: 52),
+            field.widthAnchor.constraint(equalToConstant: Theme.scaled(52)),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         value = initial

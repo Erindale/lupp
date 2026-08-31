@@ -95,7 +95,86 @@ enum Theme {
         return NSColor(srgbRed: c, green: c, blue: c, alpha: 1)
     }
 
-    static let panelWidth: CGFloat = 320
+    /// How large the interface is drawn, as a multiple of the design size.
+    ///
+    /// A viewer gets used on a 14" laptop and on a 32" monitor two feet away,
+    /// and a fixed 11pt label is wrong on at least one of them. Every size in
+    /// the chrome goes through `scaled` so there is one number to turn.
+    ///
+    /// The image is deliberately not affected: zoom is its own control, and
+    /// having a preference that quietly changed magnification would make the
+    /// percentage in the corner a lie.
+    static var uiScale: CGFloat { Preferences.uiScale }
+
+    /// A design-time size in points, at the current interface size.
+    /// Rounded to halves, since landing on a half-pixel at 2x is still crisp
+    /// and it keeps rows from drifting apart by a third of a point each.
+    static func scaled(_ v: CGFloat) -> CGFloat {
+        (v * uiScale * 2).rounded() / 2
+    }
+
+    static var panelWidth: CGFloat { scaled(320) }
+
+    /// The footer's rotate marks: a big sweeping arrow around a small frame.
+    ///
+    /// Drawn rather than taken from SF Symbols, where `rotate.left` and friends
+    /// are a large box with a token arrow tucked into one corner. The action
+    /// here is the turning, not the picture, so the arrow is the thing that
+    /// should be legible at 13pt and the frame is just what it turns.
+    ///
+    /// A template image, so the button's tint follows the backdrop like
+    /// everything else in the bar.
+    static func rotateIcon(size s: CGFloat = 13, clockwise: Bool) -> NSImage {
+        let img = NSImage(size: NSSize(width: s, height: s))
+        img.lockFocus()
+        defer { img.unlockFocus(); img.isTemplate = true }
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return img }
+
+        let c = CGPoint(x: s / 2, y: s / 2)
+        let r = s * 0.37
+        let lw = max(1, s * 0.085)
+        ctx.setStrokeColor(NSColor.black.cgColor)
+        ctx.setFillColor(NSColor.black.cgColor)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.miter)
+
+        // The frame being turned: small, since it is the turning that is the
+        // action and the picture is only what it happens to.
+        let side = s * 0.24
+        ctx.setLineWidth(max(1, s * 0.075))
+        ctx.addPath(CGPath(roundedRect: CGRect(x: c.x - side / 2, y: c.y - side / 2,
+                                               width: side, height: side),
+                           cornerWidth: side * 0.28, cornerHeight: side * 0.28,
+                           transform: nil))
+        ctx.strokePath()
+
+        // Most of a turn, stopping where the head begins.
+        ctx.setLineWidth(lw)
+        let start: CGFloat = clockwise ? .pi * 0.58 : .pi * 0.42
+        let sweep: CGFloat = .pi * 1.46
+        let end = clockwise ? start - sweep : start + sweep
+        ctx.addArc(center: c, radius: r, startAngle: start, endAngle: end,
+                   clockwise: clockwise)
+        ctx.strokePath()
+
+        // A triangle whose base sits on the end of the sweep and whose tip
+        // carries on along the tangent, so the two read as one stroke rather
+        // than as a blob stuck to the end of an arc.
+        let base = CGPoint(x: c.x + cos(end) * r, y: c.y + sin(end) * r)
+        let heading = clockwise ? end - .pi / 2 : end + .pi / 2
+        let headLen = lw * 2.5
+        let halfWidth = lw * 1.45
+        let normal = heading + .pi / 2
+        ctx.move(to: CGPoint(x: base.x + cos(heading) * headLen,
+                             y: base.y + sin(heading) * headLen))
+        ctx.addLine(to: CGPoint(x: base.x + cos(normal) * halfWidth,
+                                y: base.y + sin(normal) * halfWidth))
+        ctx.addLine(to: CGPoint(x: base.x - cos(normal) * halfWidth,
+                                y: base.y - sin(normal) * halfWidth))
+        ctx.closePath()
+        ctx.fillPath()
+        return img
+    }
 
     /// The colour panel's title-bar icon: an "o" — a ring carrying a sweep from
     /// dark to light all the way round, with a seam at the top.
@@ -106,7 +185,8 @@ enum Theme {
     ///
     /// Active and inactive differ only in brightness — the same mark, lit or
     /// dimmed — rather than being two different glyphs.
-    static func gradeIcon(size s: CGFloat = 15, active: Bool) -> NSImage {
+    static func gradeIcon(size: CGFloat? = nil, active: Bool) -> NSImage {
+        let s = size ?? scaled(15)
         // Never down to true black: on a dark title bar that half of the ring
         // would simply disappear and the "o" would read as a "c".
         let low: CGFloat = active ? 0.34 : 0.16

@@ -13,13 +13,13 @@ final class ReadoutBar: NSView {
     /// For a file that is wrong about which way up it is. Both directions,
     /// because one button means three clicks to go the other way.
     private let rotateLeft = ReadoutBar.rotateButton(
-        symbol: "rotate.left", tip: "Rotate anticlockwise",
+        clockwise: false, tip: "Rotate anticlockwise",
         action: #selector(ViewerWindowController.rotateImageLeft(_:)))
     private let rotateRight = ReadoutBar.rotateButton(
-        symbol: "rotate.right", tip: "Rotate clockwise",
+        clockwise: true, tip: "Rotate clockwise",
         action: #selector(ViewerWindowController.rotateImageRight(_:)))
 
-    static let height: CGFloat = 26
+    static var height: CGFloat { Theme.scaled(26) }
 
     init() {
         super.init(frame: .zero)
@@ -31,29 +31,29 @@ final class ReadoutBar: NSView {
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Theme.scaled(10)),
             swatch.centerYAnchor.constraint(equalTo: centerYAnchor),
-            swatch.widthAnchor.constraint(equalToConstant: 13),
-            swatch.heightAnchor.constraint(equalToConstant: 13),
+            swatch.widthAnchor.constraint(equalToConstant: Theme.scaled(13)),
+            swatch.heightAnchor.constraint(equalToConstant: Theme.scaled(13)),
 
-            left.leadingAnchor.constraint(equalTo: swatch.trailingAnchor, constant: 8),
+            left.leadingAnchor.constraint(equalTo: swatch.trailingAnchor, constant: Theme.scaled(8)),
             left.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            right.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            right.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Theme.scaled(10)),
             right.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             // Sized explicitly: an 11pt glyph is a smaller target than anyone can
             // reliably hit, and the footer has the room.
-            rotateRight.trailingAnchor.constraint(equalTo: right.leadingAnchor, constant: -8),
+            rotateRight.trailingAnchor.constraint(equalTo: right.leadingAnchor, constant: -Theme.scaled(8)),
             rotateRight.centerYAnchor.constraint(equalTo: centerYAnchor),
-            rotateRight.widthAnchor.constraint(equalToConstant: 22),
-            rotateRight.heightAnchor.constraint(equalToConstant: 20),
+            rotateRight.widthAnchor.constraint(equalToConstant: Theme.scaled(22)),
+            rotateRight.heightAnchor.constraint(equalToConstant: Theme.scaled(20)),
             rotateLeft.trailingAnchor.constraint(equalTo: rotateRight.leadingAnchor, constant: 0),
             rotateLeft.centerYAnchor.constraint(equalTo: centerYAnchor),
-            rotateLeft.widthAnchor.constraint(equalToConstant: 22),
-            rotateLeft.heightAnchor.constraint(equalToConstant: 20),
+            rotateLeft.widthAnchor.constraint(equalToConstant: Theme.scaled(22)),
+            rotateLeft.heightAnchor.constraint(equalToConstant: Theme.scaled(20)),
 
-            left.trailingAnchor.constraint(lessThanOrEqualTo: rotateLeft.leadingAnchor, constant: -12),
+            left.trailingAnchor.constraint(lessThanOrEqualTo: rotateLeft.leadingAnchor, constant: -Theme.scaled(12)),
         ])
     }
 
@@ -67,11 +67,11 @@ final class ReadoutBar: NSView {
 
     /// Target stays nil so the action travels the responder chain to whichever
     /// window is in front, the same way the title bar's panel buttons do.
-    private static func rotateButton(symbol: String, tip: String,
+    private static func rotateButton(clockwise: Bool, tip: String,
                                      action: Selector) -> NSButton {
         let b = NSButton()
-        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
+        b.image = Theme.rotateIcon(size: Theme.scaled(13), clockwise: clockwise)
+        b.setAccessibilityLabel(tip)
         b.toolTip = tip
         b.bezelStyle = .texturedRounded
         b.isBordered = false

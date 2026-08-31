@@ -57,6 +57,29 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         self.init(url: url, deferOpening: false)
     }
 
+    /// Everything needed to build this window again: which picture, and the work
+    /// standing on it. Used when the interface size changes, since the panels
+    /// size themselves as they are built and there is no honest way to restretch
+    /// them in place.
+    func rebuildSnapshot() -> (session: Session, image: URL)? {
+        guard let img = canvas.image else { return nil }
+        return (Session.from(canvas.display, image: img.url, lutPath: currentLUTPath), img.url)
+    }
+
+    /// A window built to receive work that already exists in memory, rather than
+    /// to open a file from scratch.
+    convenience init(restoring session: Session, image: URL) {
+        self.init(url: image, deferOpening: true)
+        restore(session, image: image)
+    }
+
+    /// Open a picture with work already attached, without going via a file.
+    func restore(_ session: Session, image: URL) {
+        pendingSession = session
+        hasSizedToImage = true      // the window is the user's, not the session's
+        open(url: image)
+    }
+
     private convenience init(url: URL, deferOpening: Bool) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
@@ -153,7 +176,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
         scopesButton.image = NSImage(systemSymbolName: "chart.bar.xaxis",
                                      accessibilityDescription: "Inspector")?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+            .withSymbolConfiguration(.init(pointSize: Theme.scaled(14), weight: .medium))
         scopesButton.toolTip = "Inspector — histogram, waveform, vectorscope, CIE"
         scopesButton.action = #selector(toggleScopes(_:))
 

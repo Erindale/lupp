@@ -76,6 +76,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         c.showWindow(nil)
     }
 
+    /// Change how large the interface is drawn.
+    ///
+    /// Panels size themselves as they are built, so the open windows are rebuilt
+    /// rather than restretched — the picture and the work come across, because
+    /// a preference that quietly threw away a grade would not be worth having.
+    /// New windows are made before the old ones close, so the decoded-image
+    /// cache isn't emptied in the gap.
+    @objc func setInterfaceScale(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem else { return }
+        let wanted = CGFloat(item.tag) / 100
+        guard abs(wanted - Preferences.uiScale) > 0.001 else { return }
+        Preferences.uiScale = wanted
+
+        let outgoing = controllers
+        let snapshots = outgoing.compactMap { $0.rebuildSnapshot() }
+        for snap in snapshots {
+            let c = ViewerWindowController(restoring: snap.session, image: snap.image)
+            controllers.append(c)
+            c.showWindow(nil)
+        }
+        for c in outgoing { c.window?.close() }
+        // Nothing was open to rebuild, so there is nothing to show the change on.
+        if snapshots.isEmpty, outgoing.isEmpty {
+            alert("Interface size set to \(Int(wanted * 100))%",
+                  "It applies to the next window you open.")
+        }
+    }
+
     func forget(_ c: ViewerWindowController) {
         controllers.removeAll { $0 === c }
         // With no window open there is nothing the cached frames could be for,
@@ -147,6 +175,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if item.action == #selector(toggleInvertScrollZoom(_:)) {
             item.state = Preferences.invertScrollZoom ? .on : .off
+        }
+        if item.action == #selector(setInterfaceScale(_:)) {
+            item.state = abs(CGFloat(item.tag) / 100 - Preferences.uiScale) < 0.001 ? .on : .off
         }
         return true
     }
@@ -254,6 +285,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          action: #selector(ViewerWindowController.toggleGrade(_:)),
                                          keyEquivalent: "n")
         gradeItem.keyEquivalentModifierMask = []
+        viewMenu.addItem(.separator())
+        let sizeItem = viewMenu.addItem(withTitle: "Interface Size", action: nil, keyEquivalent: "")
+        let sizeMenu = NSMenu(title: "Interface Size")
+        for percent in [80, 90, 100, 115, 130, 150] {
+            let item = sizeMenu.addItem(withTitle: percent == 100 ? "100%  (default)" : "\(percent)%",
+                                        action: #selector(setInterfaceScale(_:)), keyEquivalent: "")
+            item.tag = percent
+            item.target = self
+        }
+        sizeItem.submenu = sizeMenu
         viewMenu.addItem(.separator())
         let scrollToggle = viewMenu.addItem(withTitle: "Scroll Wheel Zooms",
                                             action: #selector(toggleScrollWheelZooms(_:)), keyEquivalent: "")

@@ -189,7 +189,7 @@ final class SectionHeader: NSView {
         guard let bypass else { return }
         bypass.image = NSImage(systemSymbolName: "power",
                                accessibilityDescription: on ? "On" : "Bypassed")?
-            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: Theme.scaled(9), weight: .semibold))
         bypass.contentTintColor = on ? Theme.text(.primary) : Theme.text(.tertiary)
         bypass.alphaValue = on ? 1 : 0.5
     }
@@ -207,7 +207,7 @@ final class SectionHeader: NSView {
         let resetButton = ActionButton(action: reset)
         resetButton.image = NSImage(systemSymbolName: "arrow.counterclockwise",
                                     accessibilityDescription: "Reset \(title)")?
-            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: Theme.scaled(9), weight: .semibold))
         resetButton.imagePosition = .imageOnly
         resetButton.isBordered = false
         resetButton.bezelStyle = .texturedRounded
@@ -236,16 +236,16 @@ final class SectionHeader: NSView {
             label.leadingAnchor.constraint(equalTo: leadingAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             resetButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            resetButton.widthAnchor.constraint(equalToConstant: 16),
-            resetButton.heightAnchor.constraint(equalToConstant: 14),
+            resetButton.widthAnchor.constraint(equalToConstant: Theme.scaled(16)),
+            resetButton.heightAnchor.constraint(equalToConstant: Theme.scaled(14)),
         ]
         if let bypass {
             c += [
                 resetButton.trailingAnchor.constraint(equalTo: bypass.leadingAnchor, constant: -4),
                 bypass.trailingAnchor.constraint(equalTo: trailingAnchor),
                 bypass.centerYAnchor.constraint(equalTo: centerYAnchor),
-                bypass.widthAnchor.constraint(equalToConstant: 16),
-                bypass.heightAnchor.constraint(equalToConstant: 14),
+                bypass.widthAnchor.constraint(equalToConstant: Theme.scaled(16)),
+                bypass.heightAnchor.constraint(equalToConstant: Theme.scaled(14)),
                 resetButton.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
             ]
         } else {
@@ -299,8 +299,11 @@ final class ThemedLabel: NSTextField {
         self.role = role
         super.init(frame: .zero)
         stringValue = text
-        font = monospaced ? .monospacedSystemFont(ofSize: size, weight: weight)
-                          : .systemFont(ofSize: size, weight: weight)
+        // Scaled here rather than at each call site, so every label in the app
+        // follows the interface size from one place and none can be forgotten.
+        let pt = Theme.scaled(size)
+        font = monospaced ? .monospacedSystemFont(ofSize: pt, weight: weight)
+                          : .systemFont(ofSize: pt, weight: weight)
         isEditable = false
         isBordered = false
         isSelectable = false

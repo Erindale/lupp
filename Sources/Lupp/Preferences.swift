@@ -75,6 +75,24 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: "invertScrollZoom") }
     }
 
+    /// How large the interface is drawn. 1.0 is the design size.
+    ///
+    /// Clamped on read rather than only on write, so a value typed straight into
+    /// the defaults plist can't produce a window with no usable controls in it.
+    static let uiScaleRange: ClosedRange<CGFloat> = 0.8...1.6
+
+    static var uiScale: CGFloat {
+        get {
+            guard let v = UserDefaults.standard.object(forKey: "uiScale") as? Double
+            else { return 1 }
+            return min(max(CGFloat(v), uiScaleRange.lowerBound), uiScaleRange.upperBound)
+        }
+        set {
+            let v = min(max(newValue, uiScaleRange.lowerBound), uiScaleRange.upperBound)
+            UserDefaults.standard.set(Double(v), forKey: "uiScale")
+        }
+    }
+
     /// Which waveform the parade scope shows: 0 parade, 1 combined, 2 luma.
     /// One scope with three modes rather than three scopes, as Resolve does it.
     static var paradeMode: Int {
