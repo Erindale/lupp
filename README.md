@@ -367,4 +367,9 @@ paste `Lupp-organic-1024.png`. Both come from the same generator —
 
 ## Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE).
+
+Lupp vendors no third-party code and has no package dependencies, but it does
+implement algorithms worked out by other people. They're credited in
+[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md), along with the camera-log trademarks
+Lupp names in order to say which encodings it supports.
