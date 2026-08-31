@@ -291,11 +291,22 @@ final class Renderer {
 
         if let tex = texture, imageSize.width > 0, imageSize.height > 0 {
             let vw = view.bounds.width, vh = view.bounds.height
+
+            // An applied crop is the working image, so the quad takes the crop's
+            // size — not the file's. Without this the UV window narrows to the
+            // crop while the quad stays full-frame, and the crop is stretched
+            // across the wrong aspect.
+            let cp = display.cropPixels(imageWidth: Int(imageSize.width),
+                                        imageHeight: Int(imageSize.height))
+            let drawn = (display.cropEnabled && display.cropApplied)
+                ? CGSize(width: CGFloat(cp.w), height: CGFloat(cp.h))
+                : imageSize
+
             // Image rect in flipped view points, then into clip space (y up).
             let x0 = viewport.origin.x
             let y0 = viewport.origin.y
-            let x1 = x0 + imageSize.width * viewport.scale
-            let y1 = y0 + imageSize.height * viewport.scale
+            let x1 = x0 + drawn.width * viewport.scale
+            let y1 = y0 + drawn.height * viewport.scale
 
             let rect = SIMD4<Float>(
                 Float(x0 / vw * 2 - 1),

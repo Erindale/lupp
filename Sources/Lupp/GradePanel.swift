@@ -161,17 +161,16 @@ final class GradePanel: SidePanel {
                                       self?.emit { self?.onBypass?(.lut, on) } },
                                   reset: { [weak self] in self?.emit { self?.onClearLUT?() } })
 
-        masterHeader = sectionHeader("Grading   (B)",
+        masterHeader = sectionHeader("Grading",
                                      toggle: { [weak self] on in
                                          self?.emit { self?.onBypass?(.master, on) } },
+                                     size: 12,
                                      reset: { [weak self] in self?.resetEverything() })
 
-        let masterNote = caption("The power icon on each section bypasses it without discarding anything — switch back and you are exactly where you were. Shift while dragging any slider moves it at a tenth speed.")
         let cropNote = caption("Drag the rectangle on the image; hold Shift for a tenth-speed drag with a magnifier. Applied makes the crop the working image — zoom, scopes and readout all follow it — without touching the source, so switching back to Overlay costs nothing. Export writes the crop at its own pixel size either way.")
 
         var column: [NSView] = [
             masterHeader,
-            masterNote,
             separator(),
             lightHeader, blackRow, whiteRow, exposureRow, contrastRow, pivotRow,
             wbHeader, wbRows[0], wbRows[1], wbRows[2],
@@ -206,7 +205,6 @@ final class GradePanel: SidePanel {
         wide += [presetPopup, presetButtons, exportButton, exportNote] as [NSView]
         wide += [masterHeader, lightHeader, wbHeader, tetraHeader, lutHeader] as [NSView]
         wide += [cropHeader, cropAspect, cropApply, cropSize, cropNote] as [NSView]
-        wide += [masterNote] as [NSView]
         wide += tetraRowViews
         wide += lightRows as [NSView]
         wide += balanceRows as [NSView]

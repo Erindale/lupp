@@ -115,7 +115,10 @@ final class CropOverlayView: NSView {
         let clip = NSBezierPath(roundedRect: frame, xRadius: 5, yRadius: 5)
         clip.addClip()
         ctx.interpolationQuality = .none          // show pixels, not a blur of them
-        ctx.draw(l.image, in: frame)
+        // NSImage rather than CGContext.draw: this view is flipped, and drawing a
+        // CGImage straight into a flipped context comes out upside down. NSImage
+        // knows about the view's handedness.
+        NSImage(cgImage: l.image, size: frame.size).draw(in: frame)
         ctx.restoreGState()
 
         // Crosshair on the exact point being placed.

@@ -121,8 +121,9 @@ class SidePanel: NSView {
     /// at a time is the whole point — and undoing a white balance experiment
     /// shouldn't cost you the cube warp you were happy with.
     func sectionHeader(_ t: String, toggle: ((Bool) -> Void)? = nil,
+                       size: CGFloat = 9,
                        reset: @escaping () -> Void) -> SectionHeader {
-        SectionHeader(title: t.uppercased(), toggle: toggle, reset: reset)
+        SectionHeader(title: t.uppercased(), toggle: toggle, reset: reset, size: size)
     }
 
     private func unusedSectionHeader(_ t: String, reset: @escaping () -> Void) -> NSView {
@@ -223,8 +224,11 @@ final class SectionHeader: NSView {
         bypass.alphaValue = on ? 1 : 0.5
     }
 
-    init(title: String, toggle: ((Bool) -> Void)?, reset: @escaping () -> Void) {
-        label = ThemedLabel(title, role: .tertiary, size: 9, weight: .semibold)
+    init(title: String, toggle: ((Bool) -> Void)?, reset: @escaping () -> Void,
+         size: CGFloat = 9) {
+        // The panel's own title sits a little larger than the sections under it.
+        label = ThemedLabel(title, role: size > 9 ? .secondary : .tertiary,
+                            size: size, weight: .semibold)
         bypass = toggle == nil ? nil : ActionButton(action: {})
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -258,7 +262,7 @@ final class SectionHeader: NSView {
         // Reset then bypass, with the bypass outermost — the switch you reach
         // for repeatedly sits at the edge, the destructive one further in.
         var c: [NSLayoutConstraint] = [
-            heightAnchor.constraint(equalToConstant: 16),
+            heightAnchor.constraint(equalToConstant: max(16, size + 7)),
             label.leadingAnchor.constraint(equalTo: leadingAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             resetButton.centerYAnchor.constraint(equalTo: centerYAnchor),
