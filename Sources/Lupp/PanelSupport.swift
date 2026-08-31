@@ -212,13 +212,15 @@ final class SectionHeader: NSView {
         set { on = newValue; refreshBypass() }
     }
 
+    /// One glyph at one weight for both states, so the header doesn't reflow as
+    /// it is toggled — only the tint says which way it is set.
     private func refreshBypass() {
         guard let bypass else { return }
-        bypass.image = NSImage(systemSymbolName: on ? "power" : "power.circle",
+        bypass.image = NSImage(systemSymbolName: "power",
                                accessibilityDescription: on ? "On" : "Bypassed")?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: on ? .semibold : .regular))
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
         bypass.contentTintColor = on ? Theme.text(.primary) : Theme.text(.tertiary)
-        bypass.alphaValue = on ? 1 : 0.55
+        bypass.alphaValue = on ? 1 : 0.5
     }
 
     init(title: String, toggle: ((Bool) -> Void)?, reset: @escaping () -> Void) {
@@ -253,22 +255,29 @@ final class SectionHeader: NSView {
             addSubview(v)
         }
 
+        // Reset then bypass, with the bypass outermost — the switch you reach
+        // for repeatedly sits at the edge, the destructive one further in.
         var c: [NSLayoutConstraint] = [
             heightAnchor.constraint(equalToConstant: 16),
             label.leadingAnchor.constraint(equalTo: leadingAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            resetButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             resetButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             resetButton.widthAnchor.constraint(equalToConstant: 16),
             resetButton.heightAnchor.constraint(equalToConstant: 14),
         ]
         if let bypass {
             c += [
-                bypass.trailingAnchor.constraint(equalTo: resetButton.leadingAnchor, constant: -4),
+                resetButton.trailingAnchor.constraint(equalTo: bypass.leadingAnchor, constant: -4),
+                bypass.trailingAnchor.constraint(equalTo: trailingAnchor),
                 bypass.centerYAnchor.constraint(equalTo: centerYAnchor),
                 bypass.widthAnchor.constraint(equalToConstant: 16),
                 bypass.heightAnchor.constraint(equalToConstant: 14),
-                bypass.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
+                resetButton.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
+            ]
+        } else {
+            c += [
+                resetButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+                resetButton.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
             ]
         }
         NSLayoutConstraint.activate(c)

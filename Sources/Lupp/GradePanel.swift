@@ -70,6 +70,10 @@ final class GradePanel: SidePanel {
         ("Free", nil), ("Original", 0), ("1:1", 1), ("4:3", 4.0/3), ("3:2", 1.5),
         ("16:9", 16.0/9), ("2.39:1", 2.39), ("3:4", 0.75), ("2:3", 2.0/3), ("9:16", 9.0/16),
     ]
+    /// The controls each bypass owns, so they can be dimmed when it is off — a
+    /// bypassed section should look inert, or you cannot tell at a glance which
+    /// part of the chain is actually doing anything.
+    private var sectionViews: [Section: [NSView]] = [:]
     private var lightHeader: SectionHeader!
     private var wbHeader: SectionHeader!
     private var tetraHeader: SectionHeader!
@@ -162,9 +166,12 @@ final class GradePanel: SidePanel {
                                          self?.emit { self?.onBypass?(.master, on) } },
                                      reset: { [weak self] in self?.resetEverything() })
 
+        let masterNote = caption("The power icon on each section bypasses it without discarding anything — switch back and you are exactly where you were. Shift while dragging any slider moves it at a tenth speed.")
+        let cropNote = caption("Drag the rectangle on the image; hold Shift for a tenth-speed drag with a magnifier. Applied makes the crop the working image — zoom, scopes and readout all follow it — without touching the source, so switching back to Overlay costs nothing. Export writes the crop at its own pixel size either way.")
+
         var column: [NSView] = [
             masterHeader,
-            caption("The power icon on each section bypasses it without discarding anything — switch back and you are exactly where you were. Shift while dragging any slider moves it at a tenth speed."),
+            masterNote,
             separator(),
             lightHeader, blackRow, whiteRow, exposureRow, contrastRow, pivotRow,
             wbHeader, wbRows[0], wbRows[1], wbRows[2],
@@ -178,8 +185,7 @@ final class GradePanel: SidePanel {
         // Order down the panel is the order the pixels travel: light, then the
         // cube warp, then the LUT on top, then what to do with the result.
         column += [separator(),
-                   cropHeader, cropAspect, cropApply, cropSize,
-                   caption("Drag the rectangle on the image; hold Shift for a tenth-speed drag with a magnifier. Applied makes the crop the working image — zoom, scopes and readout all follow it — without touching the source, so switching back to Overlay costs nothing. Export writes the crop at its own pixel size either way."),
+                   cropHeader, cropAspect, cropApply, cropSize, cropNote,
                    separator(),
                    lutHeader, lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
                    separator(),
@@ -187,13 +193,20 @@ final class GradePanel: SidePanel {
                    separator(),
                    sectionLabel("Export"), exportButton, exportNote]
 
+        sectionViews[.light] = [blackRow, whiteRow, exposureRow, contrastRow, pivotRow]
+        sectionViews[.whiteBalance] = wbRows
+        sectionViews[.tetra] = tetraRowViews + ([tetraAmount] as [NSView])
+        sectionViews[.lut] = [lutPopup, lutButtons, lutLabel, lutSlider]
+        sectionViews[.crop] = [cropAspect, cropApply, cropSize]
+
         // Built in named pieces: one literal mixing this many control types is
         // more than the type checker will do in reasonable time.
         var wide: [NSView] = [lutPopup, lutButtons, lutLabel, lutSlider, lutNote]
         wide += [tetraAmount, tetraNote, lightNote, savePresetButton] as [NSView]
         wide += [presetPopup, presetButtons, exportButton, exportNote] as [NSView]
         wide += [masterHeader, lightHeader, wbHeader, tetraHeader, lutHeader] as [NSView]
-        wide += [cropHeader, cropAspect, cropApply, cropSize] as [NSView]
+        wide += [cropHeader, cropAspect, cropApply, cropSize, cropNote] as [NSView]
+        wide += [masterNote] as [NSView]
         wide += tetraRowViews
         wide += lightRows as [NSView]
         wide += balanceRows as [NSView]
@@ -358,6 +371,22 @@ final class GradePanel: SidePanel {
         masterHeader.isOn = display.gradeEnabled
         cropHeader.isOn = display.cropEnabled
         cropApply.isEnabled = display.cropEnabled
+
+        // Dim what is switched off. The master dims everything, so a bypassed
+        // section inside a bypassed grade doesn't read as if it were live.
+        let master = display.gradeEnabled
+        let on: [Section: Bool] = [
+            .light: display.lightOn, .whiteBalance: display.whiteBalanceOn,
+            .tetra: display.tetraOn, .lut: display.lutOn, .crop: display.cropEnabled,
+        ]
+        for (section, views) in sectionViews {
+            // Crop is not part of the grade chain, so the master doesn't reach it.
+            let live = (on[section] ?? true) && (section == .crop || master)
+            for v in views { v.alphaValue = live ? 1 : 0.4 }
+        }
+        for header in [lightHeader, wbHeader, tetraHeader, lutHeader] {
+            header?.alphaValue = master ? 1 : 0.55
+        }
         if !handlingControlAction { cropApply.selectedSegment = display.cropApplied ? 1 : 0 }
         lightHeader.isOn = display.lightOn
         wbHeader.isOn = display.whiteBalanceOn

@@ -310,6 +310,17 @@ hand pixels back, so an honest readout needs `AVPlayerItemVideoOutput` plus the
 YCbCr matrix and transfer function from the track — which is exactly where most
 tools quietly get the numbers wrong.
 
+## The icon
+
+The app ships a squircle, because macOS 26 composites a legacy `.icns` onto a
+light plate wherever the artwork leaves the tile transparent — a free-form
+silhouette gets a white rounded square behind it.
+
+`Icon/` holds the original organic version for assigning by hand, where that
+doesn't apply: open Get Info on `Lupp.app`, click the icon at the top left, and
+paste `Lupp-organic-1024.png`. Both come from the same generator —
+`swift Tools/makeicon.swift --organic <dir>`.
+
 ## Licence
 
 MIT.

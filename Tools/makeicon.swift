@@ -14,9 +14,14 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-let outDir = CommandLine.arguments.count > 1
-    ? URL(fileURLWithPath: CommandLine.arguments[1])
-    : URL(fileURLWithPath: "Lupp.iconset")
+// `--organic` draws the free-form silhouette instead of the system squircle.
+// The app itself uses the squircle, because macOS 26 composites a legacy .icns
+// onto a light plate wherever the artwork leaves the tile transparent. The
+// organic one is kept for assigning by hand, where that doesn't apply.
+let organic = CommandLine.arguments.contains("--organic")
+let positional = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("--") }
+let outDir = positional.first.map { URL(fileURLWithPath: $0) }
+    ?? URL(fileURLWithPath: "Lupp.iconset")
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
 // MARK: - Colour
@@ -85,6 +90,12 @@ func squircleField(_ nx: Double, _ ny: Double) -> Double {
     pow(abs(nx), squircleExponent) + pow(abs(ny), squircleExponent)
 }
 
+/// The free-form silhouette: a circle with a slow wobble, small enough to still
+/// read as a circle at 16px and just enough not to look machine-drawn at 512.
+func organicRadius(_ theta: Double) -> Double {
+    0.955 + 0.030 * sin(3 * theta + 0.7) + 0.017 * sin(2 * theta - 1.2)
+}
+
 func drawIcon(size D: Int) -> CGImage? {
     var px = [UInt8](repeating: 0, count: D * D * 4)
     let d = Double(D)
@@ -95,11 +106,20 @@ func drawIcon(size D: Int) -> CGImage? {
             let nx = (Double(x) + 0.5) / d * 2 - 1
             let ny = (Double(y) + 0.5) / d * 2 - 1
 
-            // Antialias by comparing the field against 1, scaled so the softness
-            // is roughly constant in pixels regardless of where on the edge we are.
-            let f = squircleField(nx, ny)
-            let grad = max(squircleExponent * pow(max(abs(nx), abs(ny)), squircleExponent - 1), 1e-6)
-            let alpha = min(max((1 - f) / (grad * 2 * aa) + 0.5, 0), 1)
+            let alpha: Double
+            if organic {
+                let radius = (nx * nx + ny * ny).squareRoot()
+                let edge = organicRadius(atan2(-ny, nx))
+                alpha = min(max((edge - radius) / (2 * aa) + 0.5, 0), 1)
+            } else {
+                // Antialias by comparing the field against 1, scaled so the
+                // softness is roughly constant in pixels wherever on the edge
+                // we are.
+                let f = squircleField(nx, ny)
+                let grad = max(squircleExponent * pow(max(abs(nx), abs(ny)),
+                                                      squircleExponent - 1), 1e-6)
+                alpha = min(max((1 - f) / (grad * 2 * aa) + 0.5, 0), 1)
+            }
             if alpha <= 0 { continue }
 
             let u = smooth((nx + 1) / 2)
