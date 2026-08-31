@@ -126,36 +126,6 @@ class SidePanel: NSView {
         SectionHeader(title: t.uppercased(), toggle: toggle, reset: reset, size: size)
     }
 
-    private func unusedSectionHeader(_ t: String, reset: @escaping () -> Void) -> NSView {
-        let row = NSView()
-        row.translatesAutoresizingMaskIntoConstraints = false
-        let label = sectionLabel(t)
-        let button = ActionButton(action: reset)
-        button.image = NSImage(systemSymbolName: "arrow.counterclockwise",
-                               accessibilityDescription: "Reset \(t)")?
-            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
-        button.imagePosition = .imageOnly
-        button.isBordered = false
-        button.bezelStyle = .texturedRounded
-        button.contentTintColor = Theme.text(.tertiary)
-        button.toolTip = "Reset \(t.lowercased()) to defaults"
-
-        for v in [label, button] as [NSView] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            row.addSubview(v)
-        }
-        NSLayoutConstraint.activate([
-            row.heightAnchor.constraint(equalToConstant: 14),
-            label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-            label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            button.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-            button.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-            button.widthAnchor.constraint(equalToConstant: 16),
-            button.heightAnchor.constraint(equalToConstant: 14),
-        ])
-        return row
-    }
-
     func caption(_ t: String = "") -> NSTextField {
         let f = NSTextField(labelWithString: t)
         f.font = .systemFont(ofSize: 9)

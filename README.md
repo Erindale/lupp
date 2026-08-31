@@ -171,7 +171,8 @@ assumed one. Get it wrong and the LUT is applied to the wrong numbers, which
 looks like a bad grade rather than like a mistake. So the input is a setting:
 
 - **Display (sRGB)** — the usual creative LUT, applied after the view transform.
-- **S-Log3**, **LogC3 (ARRI)**, **ACEScct** — the LUT is fed log-encoded scene
+- **S-Log3**, **LogC3 (ARRI)**, **ACEScct**, **V-Log (Panasonic)** — the LUT is
+  fed log-encoded scene
   values instead. A log LUT is almost always the display rendering itself (log
   in, Rec.709 out), so choosing one means the LUT *replaces* the view transform
   rather than sitting on top of it. Tone-mapping twice would be wrong.

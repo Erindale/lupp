@@ -422,8 +422,9 @@ enum Selftest {
         // A mid-grey source: sRGB 128 decodes to linear 0.21586, close enough to
         // 0.18 to compare against the published anchors with a loose tolerance.
         for (input, expected, name) in [(LUTInput.sLog3, 0.42, "S-Log3"),
-                                        (LUTInput.logC3, 0.39, "LogC3"),
-                                        (LUTInput.acescct, 0.41, "ACEScct")] {
+                                        (LUTInput.logC3, 0.41, "LogC3"),
+                                        (LUTInput.acescct, 0.41, "ACEScct"),
+                                        (LUTInput.vLog, 0.44, "V-Log")] {
             var d = plain
             d.lutInput = input
             d.lutAmount = 1

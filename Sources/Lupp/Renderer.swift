@@ -346,33 +346,24 @@ final class Renderer {
         cmd.commit()
     }
 
-    // MARK: - Export
+    // MARK: - Offscreen
 
-    /// Render the current image at full resolution through the same shader the
-    /// screen uses, so an export is exactly what was on screen rather than a
-    /// second implementation that can drift from it.
+    /// Render `display` into an offscreen texture and hand back the raw fp16.
     ///
-    /// Returns display-encoded sRGB with straight alpha — no checkerboard, since
-    /// transparency should survive into the file rather than be painted over.
-    func exportImage(size: CGSize, display: DisplayState, bitDepth: Int) -> CGImage? {
-        guard let source = texture else { return nil }
-        let full = (w: Int(size.width), h: Int(size.height))
-        guard full.w > 0, full.h > 0 else { return nil }
-
-        // Export the crop at its own pixel size — a crop should produce a smaller
-        // file, not the same file with the surroundings painted out.
-        let c = display.cropPixels(imageWidth: full.w, imageHeight: full.h)
-        let w = c.w, h = c.h
-        let uv = SIMD4<Float>(Float(c.x) / Float(full.w),
-                              Float(c.y) / Float(full.h),
-                              Float(c.x + c.w) / Float(full.w),
-                              Float(c.y + c.h) / Float(full.h))
+    /// Export, the scopes and the crop loupe all want the same thing at different
+    /// sizes and through different windows, and each had its own copy of the
+    /// descriptor / pass / encode / synchronise / read-back dance. Three copies of
+    /// that is three chances for one of them to drift out of step with the
+    /// screen — which has already happened once, with the uniforms.
+    private func offscreen(width w: Int, height h: Int, uv: SIMD4<Float>,
+                           display: DisplayState, filter: MTLSamplerState) -> [UInt16]? {
+        guard let source = texture, w > 0, h > 0 else { return nil }
 
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float, width: w, height: h, mipmapped: false)
         desc.usage = [.renderTarget, .shaderRead]
         // Shared storage can be read back directly; discrete GPUs need managed
-        // memory plus an explicit synchronize before the CPU may look at it.
+        // memory plus an explicit synchronise before the CPU may look at it.
         let unified = device.hasUnifiedMemory
         desc.storageMode = unified ? .shared : .managed
         guard let target = device.makeTexture(descriptor: desc) else { return nil }
@@ -395,7 +386,7 @@ final class Renderer {
         enc.setFragmentBytes(&tetra, length: MemoryLayout<TetraCorners>.stride, index: 1)
         enc.setFragmentTexture(source, index: 0)
         enc.setFragmentTexture(lutTexture ?? identityLUT, index: 1)
-        enc.setFragmentSamplerState(nearest, index: 0)     // 1:1, nothing to filter
+        enc.setFragmentSamplerState(filter, index: 0)
         if let lutSampler { enc.setFragmentSamplerState(lutSampler, index: 1) }
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
@@ -412,7 +403,33 @@ final class Renderer {
             target.getBytes(raw.baseAddress!, bytesPerRow: w * 8,
                             from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
         }
-        return Renderer.cgImage(fromHalf: half, width: w, height: h, bitDepth: bitDepth)
+        return half
+    }
+
+    // MARK: - Export
+
+    /// Render the current image at full resolution through the same shader the
+    /// screen uses, so an export is exactly what was on screen rather than a
+    /// second implementation that can drift from it.
+    ///
+    /// Returns display-encoded sRGB with straight alpha — no checkerboard, since
+    /// transparency should survive into the file rather than be painted over.
+    func exportImage(size: CGSize, display: DisplayState, bitDepth: Int) -> CGImage? {
+        let full = (w: Int(size.width), h: Int(size.height))
+        guard full.w > 0, full.h > 0 else { return nil }
+
+        // Export the crop at its own pixel size — a crop should produce a smaller
+        // file, not the same file with the surroundings painted out.
+        let c = display.cropPixels(imageWidth: full.w, imageHeight: full.h)
+        let uv = SIMD4<Float>(Float(c.x) / Float(full.w),
+                              Float(c.y) / Float(full.h),
+                              Float(c.x + c.w) / Float(full.w),
+                              Float(c.y + c.h) / Float(full.h))
+
+        // Nearest: this is 1:1, so there is nothing to filter.
+        guard let half = offscreen(width: c.w, height: c.h, uv: uv,
+                                   display: display, filter: nearest) else { return nil }
+        return Renderer.cgImage(fromHalf: half, width: c.w, height: c.h, bitDepth: bitDepth)
     }
 
     /// Render the graded image small, for the scopes to measure.
@@ -433,49 +450,8 @@ final class Renderer {
         let k = min(1.0, Double(maxDimension) / Double(max(sw, sh)))
         let w = max(1, Int((Double(sw) * k).rounded())), h = max(1, Int((Double(sh) * k).rounded()))
 
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba16Float, width: w, height: h, mipmapped: false)
-        desc.usage = [.renderTarget, .shaderRead]
-        let unified = device.hasUnifiedMemory
-        desc.storageMode = unified ? .shared : .managed
-        guard let target = device.makeTexture(descriptor: desc) else { return nil }
-
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-
-        guard let cmd = queue.makeCommandBuffer(),
-              let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
-
-        var u = uniforms(for: display, rect: SIMD4<Float>(-1, -1, 1, 1),
-                         checkerSize: 1, showChecker: 0, encodeOutput: 1,
-                         uvRect: display.uvWindow)
-        var tetra = display.tetra
-        enc.setRenderPipelineState(pipeline)
-        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
-        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
-        enc.setFragmentBytes(&tetra, length: MemoryLayout<TetraCorners>.stride, index: 1)
-        enc.setFragmentTexture(source, index: 0)
-        enc.setFragmentTexture(lutTexture ?? identityLUT, index: 1)
-        enc.setFragmentSamplerState(linear, index: 0)
-        if let lutSampler { enc.setFragmentSamplerState(lutSampler, index: 1) }
-        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        enc.endEncoding()
-
-        if !unified, let blit = cmd.makeBlitCommandEncoder() {
-            blit.synchronize(resource: target)
-            blit.endEncoding()
-        }
-        cmd.commit()
-        cmd.waitUntilCompleted()
-
-        var half = [UInt16](repeating: 0, count: w * h * 4)
-        half.withUnsafeMutableBytes { raw in
-            target.getBytes(raw.baseAddress!, bytesPerRow: w * 8,
-                            from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
-        }
+        guard let half = offscreen(width: w, height: h, uv: display.uvWindow,
+                                   display: display, filter: linear) else { return nil }
         var out = [Float](repeating: 0, count: w * h * 4)
         for i in 0..<out.count { out[i] = Float(Float16(bitPattern: half[i])) }
         return (out, w, h)
@@ -486,51 +462,12 @@ final class Renderer {
     /// it actually is rather than the ungraded file underneath it.
     func renderWindow(uv: SIMD4<Float>, width: Int, height: Int,
                       display: DisplayState) -> CGImage? {
-        guard let source = texture, width > 0, height > 0 else { return nil }
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
-        desc.usage = [.renderTarget, .shaderRead]
-        let unified = device.hasUnifiedMemory
-        desc.storageMode = unified ? .shared : .managed
-        guard let target = device.makeTexture(descriptor: desc) else { return nil }
-
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-
-        guard let cmd = queue.makeCommandBuffer(),
-              let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
-        var u = uniforms(for: display, rect: SIMD4<Float>(-1, -1, 1, 1),
-                         checkerSize: 1, showChecker: 0, encodeOutput: 1, uvRect: uv)
-        var tetra = display.tetra
-        enc.setRenderPipelineState(pipeline)
-        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
-        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
-        enc.setFragmentBytes(&tetra, length: MemoryLayout<TetraCorners>.stride, index: 1)
-        enc.setFragmentTexture(source, index: 0)
-        enc.setFragmentTexture(lutTexture ?? identityLUT, index: 1)
-        enc.setFragmentSamplerState(nearest, index: 0)
-        if let lutSampler { enc.setFragmentSamplerState(lutSampler, index: 1) }
-        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        enc.endEncoding()
-        if !unified, let blit = cmd.makeBlitCommandEncoder() {
-            blit.synchronize(resource: target); blit.endEncoding()
-        }
-        cmd.commit()
-        cmd.waitUntilCompleted()
-
-        var half = [UInt16](repeating: 0, count: width * height * 4)
-        half.withUnsafeMutableBytes { raw in
-            target.getBytes(raw.baseAddress!, bytesPerRow: width * 8,
-                            from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
-        }
+        // Nearest: a magnifier should show pixels, not a blur of them.
+        guard let half = offscreen(width: width, height: height, uv: uv,
+                                   display: display, filter: nearest) else { return nil }
         return Renderer.cgImage(fromHalf: half, width: width, height: height, bitDepth: 8)
     }
 
-    /// One place that builds the uniform block, so the screen, the export and the
-    /// scopes cannot quietly disagree about how the image is being rendered.
     private func uniforms(for display: DisplayState, rect: SIMD4<Float>,
                           checkerSize: Float, showChecker: UInt32,
                           encodeOutput: UInt32,
@@ -659,6 +596,10 @@ final class Renderer {
             const float cut = 0.010591, a = 5.555556, b = 0.052272;
             const float c = 0.247190, d = 0.385537, e = 5.367655, f = 0.092809;
             return select(e * x + f, c * log10(a * x + b) + d, x > cut);
+        }
+        if (kind == 4u) {                       // Panasonic V-Log
+            const float cut = 0.01, b = 0.00873, c = 0.241514, d = 0.598206;
+            return select(5.6 * x + 0.125, c * log10(x + b) + d, x >= cut);
         }
         if (kind == 3u) {                       // ACEScct
             const float brk = 0.0078125, A = 10.5402377416545, B = 0.0729055341958355;

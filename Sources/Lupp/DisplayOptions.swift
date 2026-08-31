@@ -52,6 +52,7 @@ enum LUTInput: Int, CaseIterable {
     case sLog3 = 1
     case logC3 = 2
     case acescct = 3
+    case vLog = 4
 
     var label: String {
         switch self {
@@ -59,6 +60,7 @@ enum LUTInput: Int, CaseIterable {
         case .sLog3:   return "S-Log3"
         case .logC3:   return "LogC3 (ARRI)"
         case .acescct: return "ACEScct"
+        case .vLog:    return "V-Log (Panasonic)"
         }
     }
 
