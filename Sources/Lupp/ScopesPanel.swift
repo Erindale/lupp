@@ -12,15 +12,17 @@ final class ScopesPanel: NSView {
     private let channelControl = NSSegmentedControl(
         labels: ChannelView.allCases.map(\.label),
         trackingMode: .selectOne, target: nil, action: nil)
-    private let clippingBox = NSButton(checkboxWithTitle: "Clipping", target: nil, action: nil)
-    private let falseColourBox = NSButton(checkboxWithTitle: "False colour", target: nil, action: nil)
+    /// Same segmented treatment as the channel row, but `.selectAny` so the two
+    /// overlays are independent toggles rather than a choice of one.
+    private let overlayControl = NSSegmentedControl(
+        labels: ["Clipping", "False colour"],
+        trackingMode: .selectAny, target: nil, action: nil)
 
     private let histogram = ScopeView(title: "Histogram", heightRatio: 0.42)
-    private let waveform = ScopeView(title: "Waveform (luma)", heightRatio: 0.42)
     private let cie = CIEView(title: "CIE 1931 xy", heightRatio: 1)
-    private let paradeMode = NSSegmentedControl(labels: ["Split", "Combined"],
+    private let paradeMode = NSSegmentedControl(labels: ["Parade", "Combined", "Luma"],
                                                 trackingMode: .selectOne, target: nil, action: nil)
-    private lazy var parade = ScopeView(title: "RGB Parade", heightRatio: 0.42,
+    private lazy var parade = ScopeView(title: "Waveform", heightRatio: 0.42,
                                         accessory: paradeMode)
     private let vectorscope = VectorscopeView(title: "Vectorscope", heightRatio: 1)
     private let stats = NSTextField(labelWithString: "")
@@ -40,7 +42,7 @@ final class ScopesPanel: NSView {
         paradeMode.segmentStyle = .rounded
         paradeMode.controlSize = .mini
         paradeMode.font = .systemFont(ofSize: 9)
-        paradeMode.selectedSegment = Preferences.paradeCombined ? 1 : 0
+        paradeMode.selectedSegment = min(2, max(0, Preferences.paradeMode))
         paradeMode.target = self
         paradeMode.action = #selector(paradeModeChanged(_:))
         // Neutral rather than the system accent: in a scopes panel a saturated
@@ -48,15 +50,14 @@ final class ScopesPanel: NSView {
         paradeMode.selectedSegmentBezelColor = NSColor(white: 0.42, alpha: 1)
 
         let channelRow = buildChannelRow()
-        let overlayRow = NSStackView(views: [clippingBox, falseColourBox])
-        overlayRow.orientation = .horizontal
-        overlayRow.spacing = 14
-        for b in [clippingBox, falseColourBox] {
-            b.target = self
-            b.action = #selector(overlayChanged(_:))
-            b.font = .systemFont(ofSize: 10)
-            b.controlSize = .small
-        }
+        overlayControl.segmentDistribution = .fillEqually
+        overlayControl.segmentStyle = .rounded
+        overlayControl.controlSize = .regular
+        overlayControl.font = .systemFont(ofSize: 11)
+        overlayControl.target = self
+        overlayControl.action = #selector(overlayChanged(_:))
+        overlayControl.selectedSegmentBezelColor = NSColor(white: 0.44, alpha: 1)
+        overlayControl.translatesAutoresizingMaskIntoConstraints = false
 
         buildTransformControls()
 
@@ -72,8 +73,8 @@ final class ScopesPanel: NSView {
         }
 
         let stack = NSStackView(views: [
-            channelRow, overlayRow,
-            histogram, waveform, parade, vectorscope, cie,
+            channelRow, overlayControl,
+            histogram, parade, vectorscope, cie,
             stats,
             separator(), transformPopup, transformNote, note,
         ])
@@ -109,7 +110,7 @@ final class ScopesPanel: NSView {
             stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
         ]
-        for v in [channelControl, histogram, waveform, parade, vectorscope, cie, stats,
+        for v in [channelControl, overlayControl, histogram, parade, vectorscope, cie, stats,
                   transformPopup, transformNote, note] as [NSView] {
             c.append(v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28))
         }
@@ -162,9 +163,9 @@ final class ScopesPanel: NSView {
         onChannel?(ch)
     }
 
-    @objc private func overlayChanged(_ sender: NSButton) {
-        onClipping?(clippingBox.state == .on)
-        onFalseColour?(falseColourBox.state == .on)
+    @objc private func overlayChanged(_ sender: NSSegmentedControl) {
+        onClipping?(sender.isSelected(forSegment: 0))
+        onFalseColour?(sender.isSelected(forSegment: 1))
     }
 
     @objc private func transformChanged(_ sender: NSPopUpButton) {
@@ -173,7 +174,7 @@ final class ScopesPanel: NSView {
     }
 
     @objc private func paradeModeChanged(_ sender: NSSegmentedControl) {
-        Preferences.paradeCombined = sender.selectedSegment == 1
+        Preferences.paradeMode = sender.selectedSegment
         applyParadeMode()
     }
 
@@ -185,8 +186,8 @@ final class ScopesPanel: NSView {
     /// of sync with what's on screen after an image loads and re-detects.
     func show(display: Renderer.DisplayState, detected: ViewTransform?, sceneLinear: Bool) {
         channelControl.selectedSegment = display.channel.rawValue
-        clippingBox.state = display.showClipping ? .on : .off
-        falseColourBox.state = display.falseColour ? .on : .off
+        overlayControl.setSelected(display.showClipping, forSegment: 0)
+        overlayControl.setSelected(display.falseColour, forSegment: 1)
         transformPopup.selectItem(withTag: display.viewTransform.rawValue)
 
         if let detected {
@@ -206,7 +207,6 @@ final class ScopesPanel: NSView {
     func update(with s: Scopes?, image: FloatImage?) {
         current = s
         histogram.content = s?.histogram
-        waveform.content = s?.waveform
         cie.content = s?.cie
         vectorscope.content = s?.vectorscope
         applyParadeMode()
@@ -214,8 +214,11 @@ final class ScopesPanel: NSView {
     }
 
     private func applyParadeMode() {
-        parade.content = Preferences.paradeCombined ? current?.paradeCombined
-                                                    : current?.paradeSplit
+        switch Preferences.paradeMode {
+        case 1:  parade.content = current?.paradeCombined; parade.title = "Waveform · combined"
+        case 2:  parade.content = current?.waveform;       parade.title = "Waveform · luma"
+        default: parade.content = current?.paradeSplit;    parade.title = "Waveform · RGB parade"
+        }
     }
 
     private func text(for s: Scopes, image: FloatImage?) -> String {
@@ -255,6 +258,10 @@ private final class FlippedView: NSView {
 
 private class ScopeView: NSView {
     private let label: NSTextField
+
+    var title: String = "" {
+        didSet { label.stringValue = title.uppercased() }
+    }
     private let heightRatio: CGFloat
     var content: CGImage? { didSet { needsDisplay = true } }
 

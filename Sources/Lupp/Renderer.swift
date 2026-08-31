@@ -248,17 +248,29 @@ final class Renderer {
         return max(c, 0.0);
     }
 
-    // ARRI-style exposure ramp over the value actually reaching the screen.
-    float3 falseColourOf(float luma) {
-        if (luma < 0.025) return float3(0.35, 0.10, 0.55);   // black clip
-        if (luma < 0.100) return float3(0.15, 0.35, 0.85);   // deep shadow
-        if (luma < 0.380) return float3(0.28);
-        if (luma < 0.420) return float3(0.20, 0.80, 0.25);   // 18% mid grey
-        if (luma < 0.520) return float3(0.45);
-        if (luma < 0.560) return float3(0.95, 0.55, 0.70);   // skin
-        if (luma < 0.930) return float3(0.66);
-        if (luma < 0.995) return float3(0.95, 0.85, 0.20);   // near clip
-        return float3(0.95, 0.15, 0.15);                     // clipped
+    float srgbEncode1(float c) {
+        c = clamp(c, 0.0, 1.0);
+        return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+    }
+
+    // False colour reads the *source* luminance, not the tone-mapped result.
+    // Judging it after a view transform is meaningless: AgX rolls everything into
+    // range, so a blown render would report as perfectly exposed.
+    //
+    // Bands sit at sRGB-encoded positions of meaningful linear values — 0.18 mid
+    // grey encodes to 0.462, skin about a stop above that. Everything between the
+    // bands stays a monochrome ramp so the picture is still legible underneath.
+    float3 falseColourOf(float linearLuma) {
+        if (linearLuma >= 1.0)  return float3(0.95, 0.12, 0.12);   // clipped
+        if (linearLuma <= 0.0)  return float3(0.30, 0.09, 0.52);   // at or below black
+
+        float e = srgbEncode1(linearLuma);
+        if (e < 0.020) return float3(0.44, 0.14, 0.64);            // crushed
+        if (e < 0.100) return float3(0.16, 0.38, 0.88);            // deep shadow
+        if (e >= 0.440 && e < 0.484) return float3(0.16, 0.82, 0.24);  // 18% grey
+        if (e >= 0.605 && e < 0.650) return float3(0.97, 0.60, 0.72);  // skin
+        if (e >= 0.940) return float3(0.97, 0.86, 0.18);           // near clip
+        return float3(e);
     }
 
     struct VOut {
@@ -297,11 +309,15 @@ final class Renderer {
         }
 
         float alpha = (u.channel == 4u) ? 1.0 : c.a;
+        // Luma of the exposed source, kept before the view transform so false
+        // colour describes the data rather than the look applied to it.
+        float srcLuma = dot(max(c.rgb * u.exposure, 0.0), float3(0.2126, 0.7152, 0.0722));
+        if (any(c.rgb * u.exposure > 1.0)) { srcLuma = max(srcLuma, 1.0); }
+
         rgb = applyView(rgb, u.viewTransform);
 
         if (u.falseColour != 0u) {
-            float luma = dot(linearToSrgb(rgb), float3(0.2126, 0.7152, 0.0722));
-            rgb = srgbToLinear(falseColourOf(luma));
+            rgb = srgbToLinear(falseColourOf(srcLuma));
             alpha = 1.0;
         } else if (u.showClipping != 0u && (over || under)) {
             float3 mark = over ? float3(0.95, 0.10, 0.10) : float3(0.10, 0.45, 0.95);

@@ -4,6 +4,7 @@ import simd
 
 protocol ImageCanvasDelegate: AnyObject {
     func canvasReadoutChanged(_ canvas: ImageCanvasView)
+    func canvasDisplayChanged(_ canvas: ImageCanvasView)
     func canvasWantsNavigation(_ canvas: ImageCanvasView, by delta: Int)
 }
 
@@ -23,6 +24,7 @@ final class ImageCanvasView: MTKView {
         didSet {
             needsDisplay = true
             canvasDelegate?.canvasReadoutChanged(self)
+            canvasDelegate?.canvasDisplayChanged(self)
         }
     }
 
@@ -273,6 +275,14 @@ final class ImageCanvasView: MTKView {
         case "e": exposureEV += 0.25
         case "E": exposureEV -= 0.25
         case "r": exposureEV = 0
+        case "c": display.showClipping.toggle()
+        case "f": display.falseColour.toggle()
+        case "1": display.channel = .rgb
+        case "2": display.channel = .red
+        case "3": display.channel = .green
+        case "4": display.channel = .blue
+        case "5": display.channel = .alpha
+        case "6": display.channel = .luma
         default: super.keyDown(with: e)
         }
     }

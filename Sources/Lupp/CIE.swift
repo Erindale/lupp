@@ -4,9 +4,17 @@ import Foundation
 /// CIE 1931 chromaticity reference data for the xy scope.
 enum CIE {
     static let size = 256
-    /// Plot bounds. The spectral locus fits inside x≤0.75, y≤0.85.
-    static let xMax = 0.75
-    static let yMax = 0.85
+
+    /// Plot bounds — deliberately equal on both axes.
+    ///
+    /// A chromaticity diagram has to be isotropic: one unit of x and one unit of y
+    /// must measure the same on screen, or the locus is drawn stretched and the
+    /// gamut triangles misrepresent their own shapes. Using different ranges for
+    /// the two axes inside a square plot did exactly that. The locus peaks at
+    /// x≈0.735, y≈0.834, so a common 0.85 contains it with room to spare.
+    static let axisMax = 0.85
+    static var xMax: Double { axisMax }
+    static var yMax: Double { axisMax }
 
     static let d65 = CGPoint(x: 0.3127, y: 0.3290)
 

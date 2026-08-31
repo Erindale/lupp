@@ -273,6 +273,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
                        downsampled: c.isDownsampledView)
     }
 
+    func canvasDisplayChanged(_ c: ImageCanvasView) {
+        syncPanelControls()
+    }
+
     func canvasWantsNavigation(_ c: ImageCanvasView, by delta: Int) {
         guard siblings.count > 1 else { return }
         index = (index + delta + siblings.count) % siblings.count
@@ -290,6 +294,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     @objc func increaseExposure(_ sender: Any?) { canvas.exposureEV += 0.25; canvasReadoutChanged(canvas) }
     @objc func decreaseExposure(_ sender: Any?) { canvas.exposureEV -= 0.25; canvasReadoutChanged(canvas) }
     @objc func resetExposure(_ sender: Any?)    { canvas.exposureEV = 0; canvasReadoutChanged(canvas) }
+    @objc func toggleClipping(_ sender: Any?)   { canvas.display.showClipping.toggle() }
+    @objc func toggleFalseColour(_ sender: Any?) { canvas.display.falseColour.toggle() }
 
     func windowWillClose(_ notification: Notification) {
         AppDelegate.shared?.forget(self)

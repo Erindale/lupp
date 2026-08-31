@@ -47,11 +47,11 @@ enum Preferences {
         set { UserDefaults.standard.set(newValue, forKey: "invertScrollZoom") }
     }
 
-    /// Parade drawn as one superimposed plot (Resolve's combined view) rather
-    /// than three side-by-side panels.
-    static var paradeCombined: Bool {
-        get { UserDefaults.standard.bool(forKey: "paradeCombined") }
-        set { UserDefaults.standard.set(newValue, forKey: "paradeCombined") }
+    /// Which waveform the parade scope shows: 0 parade, 1 combined, 2 luma.
+    /// One scope with three modes rather than three scopes, as Resolve does it.
+    static var paradeMode: Int {
+        get { UserDefaults.standard.integer(forKey: "paradeMode") }
+        set { UserDefaults.standard.set(newValue, forKey: "paradeMode") }
     }
 
     /// Windows share one autosaved frame, so a new image opens at whatever size

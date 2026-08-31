@@ -186,6 +186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         decEV.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(withTitle: "Reset Exposure", action: #selector(ViewerWindowController.resetExposure(_:)), keyEquivalent: "r")
         viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Clipping Overlay", action: #selector(ViewerWindowController.toggleClipping(_:)), keyEquivalent: "c")
+        viewMenu.addItem(withTitle: "False Colour", action: #selector(ViewerWindowController.toggleFalseColour(_:)), keyEquivalent: "f")
+        viewMenu.addItem(.separator())
         let scopesItem = viewMenu.addItem(withTitle: "Scopes",
                                           action: #selector(ViewerWindowController.toggleScopes(_:)),
                                           keyEquivalent: "i")
