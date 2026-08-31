@@ -37,16 +37,19 @@ final class Renderer {
         var rect: SIMD4<Float>
         var lutDomainMin: SIMD4<Float>
         var lutDomainMax: SIMD4<Float>
+        var whiteBalance: SIMD4<Float>
         var exposure: Float
         var checkerSize: Float
         var lutAmount: Float
+        var contrast: Float
+        var contrastPivot: Float
+        var tetraAmount: Float
         var showChecker: UInt32
         var viewTransform: UInt32
         var channel: UInt32
         var showClipping: UInt32
         var falseColour: UInt32
         var lutEnabled: UInt32
-        var tetraAmount: Float
         var tetraEnabled: UInt32
         /// Export applies the display encode in-shader; the on-screen drawable is
         /// extended-linear and lets CoreAnimation do it instead.
@@ -72,6 +75,11 @@ final class Renderer {
 
     struct DisplayState {
         var exposureEV: Float = 0
+        /// Per-channel linear gain. Neutral at 1,1,1.
+        var whiteBalance = SIMD3<Float>(1, 1, 1)
+        /// Power around `contrastPivot`; 1.0 is a no-op.
+        var contrast: Float = 1
+        var contrastPivot: Float = 0.18
         var viewTransform: ViewTransform = .standard
         var channel: ChannelView = .rgb
         var showClipping = false
@@ -249,16 +257,19 @@ final class Renderer {
             var u = Uniforms(rect: rect,
                              lutDomainMin: lutDomainMin,
                              lutDomainMax: lutDomainMax,
+                             whiteBalance: SIMD4(display.whiteBalance, 0),
                              exposure: pow(2, display.exposureEV),
                              checkerSize: Float(12 * backingScale),
                              lutAmount: display.lutAmount,
+                             contrast: display.contrast,
+                             contrastPivot: display.contrastPivot,
+                             tetraAmount: display.tetraAmount,
                              showChecker: 1,
                              viewTransform: UInt32(display.viewTransform.rawValue),
                              channel: UInt32(display.channel.rawValue),
                              showClipping: display.showClipping ? 1 : 0,
                              falseColour: display.falseColour ? 1 : 0,
                              lutEnabled: lutTexture != nil ? 1 : 0,
-                             tetraAmount: display.tetraAmount,
                              tetraEnabled: display.tetraEnabled ? 1 : 0,
                              encodeOutput: 0)
             enc.setRenderPipelineState(pipeline)
@@ -313,16 +324,19 @@ final class Renderer {
         var u = Uniforms(rect: SIMD4<Float>(-1, -1, 1, 1),
                          lutDomainMin: lutDomainMin,
                          lutDomainMax: lutDomainMax,
+                         whiteBalance: SIMD4(display.whiteBalance, 0),
                          exposure: pow(2, display.exposureEV),
                          checkerSize: 1,
                          lutAmount: display.lutAmount,
+                         contrast: display.contrast,
+                         contrastPivot: display.contrastPivot,
+                         tetraAmount: display.tetraAmount,
                          showChecker: 0,
                          viewTransform: UInt32(display.viewTransform.rawValue),
                          channel: UInt32(display.channel.rawValue),
                          showClipping: display.showClipping ? 1 : 0,
                          falseColour: display.falseColour ? 1 : 0,
                          lutEnabled: lutTexture != nil ? 1 : 0,
-                         tetraAmount: display.tetraAmount,
                          tetraEnabled: display.tetraEnabled ? 1 : 0,
                          encodeOutput: 1)
         var tetra = display.tetra
@@ -398,19 +412,32 @@ final class Renderer {
         float4 rect;
         float4 lutDomainMin;
         float4 lutDomainMax;
+        float4 whiteBalance;
         float  exposure;
         float  checkerSize;
         float  lutAmount;
+        float  contrast;
+        float  contrastPivot;
+        float  tetraAmount;
         uint   showChecker;
         uint   viewTransform;
         uint   channel;
         uint   showClipping;
         uint   falseColour;
         uint   lutEnabled;
-        float  tetraAmount;
         uint   tetraEnabled;
         uint   encodeOutput;
     };
+
+    // Contrast as a power around a pivot, in linear.
+    //
+    // Pivoted at 0.18 — scene mid grey — so raising contrast pushes highlights up
+    // and shadows down around the same point a grader thinks of as middle, rather
+    // than around whatever 0.5 happens to mean in the current encoding.
+    float3 applyContrast(float3 c, float amount, float pivot) {
+        if (amount == 1.0) return c;
+        return pivot * pow(max(c, 1e-6) / max(pivot, 1e-6), amount);
+    }
 
     struct TetraCorners {
         float4 red, yellow, green, cyan, blue, magenta;
@@ -554,13 +581,19 @@ final class Renderer {
                                   constant Uniforms &u [[buffer(0)]],
                                   constant TetraCorners &tetra [[buffer(1)]]) {
         float4 c = tex.sample(smp, in.uv);
-        float3 rgb = c.rgb * u.exposure;
 
-        // Clipping is a fact about the data, so it is judged on the exposed linear
-        // values before any tone map — a transform that rolls off highlights would
-        // otherwise hide exactly what this overlay exists to reveal.
+        // The linear grade, in the order a colourist expects: exposure, then
+        // white balance, then contrast — all before any tone map, so they behave
+        // like light rather than like adjustments to an already-rendered picture.
+        float3 rgb = c.rgb * u.exposure * u.whiteBalance.rgb;
+        rgb = applyContrast(rgb, u.contrast, u.contrastPivot);
+
+        // Clipping is a fact about the graded data, so it is judged here — before
+        // any tone map, which would otherwise roll off exactly what this overlay
+        // exists to reveal.
         bool over  = any(rgb > 1.0);
         bool under = any(rgb < 0.0);
+        float3 graded = rgb;
 
         switch (u.channel) {
             case 1u: rgb = float3(rgb.r); break;
@@ -572,10 +605,10 @@ final class Renderer {
         }
 
         float alpha = (u.channel == 4u) ? 1.0 : c.a;
-        // Luma of the exposed source, kept before the view transform so false
-        // colour describes the data rather than the look applied to it.
-        float srcLuma = dot(max(c.rgb * u.exposure, 0.0), float3(0.2126, 0.7152, 0.0722));
-        if (any(c.rgb * u.exposure > 1.0)) { srcLuma = max(srcLuma, 1.0); }
+        // Luma of the graded linear value, kept before the view transform so
+        // false colour describes the data rather than the look applied to it.
+        float srcLuma = dot(max(graded, 0.0), float3(0.2126, 0.7152, 0.0722));
+        if (over) { srcLuma = max(srcLuma, 1.0); }
 
         rgb = applyView(rgb, u.viewTransform);
 

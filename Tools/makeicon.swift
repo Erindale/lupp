@@ -71,10 +71,18 @@ let bottomRight = toOklab(hex(0xFFAE3C))   // amber
 /// bilinear patch with visible directional banding through the middle.
 func smooth(_ t: Double) -> Double { t * t * (3 - 2 * t) }
 
-/// Radius as a function of angle — a circle with a slow wobble, small enough to
-/// stay a circle at 16px and just enough to not look machine-drawn at 512.
-func shapeRadius(_ theta: Double) -> Double {
-    0.955 + 0.030 * sin(3 * theta + 0.7) + 0.017 * sin(2 * theta - 1.2)
+/// A superellipse — the shape macOS uses for app icons.
+///
+/// Filling the tile matters as much as the shape. macOS 26 composites a legacy
+/// `.icns` onto a light plate wherever the artwork leaves the tile transparent,
+/// which put a white rounded square behind the gradient. Leaving no transparent
+/// pixels for a plate to show through is what removes it — and drawing the
+/// system's own silhouette means it still looks right if nothing masks it.
+let squircleExponent = 5.0
+
+/// Signed distance-ish: < 1 inside, > 1 outside.
+func squircleField(_ nx: Double, _ ny: Double) -> Double {
+    pow(abs(nx), squircleExponent) + pow(abs(ny), squircleExponent)
 }
 
 func drawIcon(size D: Int) -> CGImage? {
@@ -86,11 +94,12 @@ func drawIcon(size D: Int) -> CGImage? {
         for x in 0..<D {
             let nx = (Double(x) + 0.5) / d * 2 - 1
             let ny = (Double(y) + 0.5) / d * 2 - 1
-            let radius = (nx * nx + ny * ny).squareRoot()
-            let edge = shapeRadius(atan2(-ny, nx))
 
-            // 1 inside, 0 outside, smooth across the boundary.
-            let alpha = min(max((edge - radius) / (2 * aa) + 0.5, 0), 1)
+            // Antialias by comparing the field against 1, scaled so the softness
+            // is roughly constant in pixels regardless of where on the edge we are.
+            let f = squircleField(nx, ny)
+            let grad = max(squircleExponent * pow(max(abs(nx), abs(ny)), squircleExponent - 1), 1e-6)
+            let alpha = min(max((1 - f) / (grad * 2 * aa) + 0.5, 0), 1)
             if alpha <= 0 { continue }
 
             let u = smooth((nx + 1) / 2)

@@ -1,44 +1,44 @@
 import AppKit
 import simd
 
-/// One labelled slider with a typed value beside it, as Resolve presents the
+/// One labelled slider with a typed value beside it, as Resolve presents a
 /// DCTL's parameters.
 ///
-/// Eighteen of these rather than six colour wells because the useful motion here
-/// is a nudge along one axis — "a little less blue in the reds" — and a colour
-/// picker makes you aim at that instead of asking for it.
-final class TetraSliderRow: NSView {
-    let corner: Int          // 0…5 in R G B C M Y order
-    let component: Int       // 0 R, 1 G, 2 B
-
+/// Used for every numeric grade control, not just the tetra corners, because the
+/// useful motion in all of them is a nudge along one axis — "a little less blue
+/// in the reds", "a third of a stop down" — and the value needs to be readable
+/// and typeable while you do it.
+class LabelledSliderRow: NSView {
     private let slider = NSSlider()
     private let field = NSTextField()
     var onChange: (() -> Void)?
 
-    /// How far either side of its default each slider reaches.
-    ///
-    /// The range is centred on the parameter's *identity* value rather than being
-    /// the same absolute span for every row, so a handle at the middle always
-    /// means "unchanged" and its distance from the middle reads directly as
-    /// deviation. That is why a default of 0.000 and one of 1.000 both sit
-    /// centred — the control answers "how far have I moved this", which is the
-    /// question you actually have while grading.
+    /// Default span for the tetra corners.
     static let span: Double = 1.0
 
     private let defaultValue: Float
+
+    private let decimals: Int
 
     var value: Float {
         get { Float(slider.doubleValue) }
         set {
             slider.doubleValue = Double(newValue)
-            field.stringValue = String(format: "%.3f", newValue)
+            field.stringValue = String(format: "%.\(decimals)f", newValue)
         }
     }
 
-    init(label: String, corner: Int, component: Int, initial: Float) {
-        self.corner = corner
-        self.component = component
+    func resetToDefault() { value = defaultValue }
+
+    /// The slider is centred on the parameter's *identity* value rather than
+    /// every row sharing one absolute range, so a handle at the middle always
+    /// means "unchanged" and its distance from the middle reads directly as
+    /// deviation. It answers "how far have I moved this", which is the question
+    /// you actually have while grading.
+    init(label: String, initial: Float, span: Double = LabelledSliderRow.span,
+         decimals: Int = 3) {
         self.defaultValue = initial
+        self.decimals = decimals
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
@@ -48,8 +48,8 @@ final class TetraSliderRow: NSView {
         name.alignment = .right
         name.lineBreakMode = .byTruncatingTail
 
-        slider.minValue = Double(initial) - TetraSliderRow.span
-        slider.maxValue = Double(initial) + TetraSliderRow.span
+        slider.minValue = Double(initial) - span
+        slider.maxValue = Double(initial) + span
         slider.controlSize = .small
         slider.trackFillColor = NSColor(white: 0.52, alpha: 1)
         slider.target = self
@@ -88,7 +88,7 @@ final class TetraSliderRow: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     @objc private func sliderMoved() {
-        field.stringValue = String(format: "%.3f", slider.doubleValue)
+        field.stringValue = String(format: "%.\(decimals)f", slider.doubleValue)
         onChange?()
     }
 
@@ -96,13 +96,27 @@ final class TetraSliderRow: NSView {
     /// convenience, not the limit of what the transform accepts.
     @objc private func fieldEdited() {
         guard let v = Double(field.stringValue) else {
-            field.stringValue = String(format: "%.3f", slider.doubleValue)
+            field.stringValue = String(format: "%.\(decimals)f", slider.doubleValue)
             return
         }
         slider.doubleValue = min(max(v, slider.minValue), slider.maxValue)
-        field.stringValue = String(format: "%.3f", v)
+        field.stringValue = String(format: "%.\(decimals)f", v)
         onChange?()
     }
+}
+
+/// A tetra corner's slider, carrying which parameter it drives.
+final class TetraSliderRow: LabelledSliderRow {
+    let corner: Int          // 0…5 in R G B C M Y order
+    let component: Int       // 0 R, 1 G, 2 B
+
+    init(label: String, corner: Int, component: Int, initial: Float) {
+        self.corner = corner
+        self.component = component
+        super.init(label: label, initial: initial)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
 }
 
 /// The eighteen parameters, in the order Resolve lists them.

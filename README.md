@@ -92,6 +92,15 @@ with the reference transforms.
 
 ## Grading
 
+The colour panel reads top to bottom in the order the pixels travel: light, then
+the cube warp, then a LUT on top, then what to do with the result.
+
+**Light** — exposure (EV), a three-channel white balance, and a contrast with an
+adjustable pivot. All three are applied in **linear, before the view transform**,
+so they behave like light rather than like edits to an already-rendered picture.
+Contrast pivots on 0.18 scene grey by default, rather than on whatever 0.5 means
+in the current encoding.
+
 **Tetrahedral interpolation**, after
 [hotgluebanjo's TetraInterp](https://github.com/hotgluebanjo/TetraInterp-DCTL).
 The RGB cube splits into six tetrahedra by the ordering of r, g and b; each has
@@ -114,7 +123,9 @@ grade you were most recently working in.
 **Export as Displayed…** (⇧⌘E) writes the image at full resolution with the view
 transform, LUT, grade and exposure baked in. It renders through the *same shader*
 as the screen, so an export is what you were looking at rather than a second
-implementation that can drift. PNG and JPEG at 8-bit, TIFF at 16-bit.
+implementation that can drift. **PNG**, **JPEG** (quality 0.95) and **TIFF** —
+8-bit for PNG and JPEG, 16-bit for TIFF, where the extra depth is the reason to
+pick it.
 
 ## LUTs
 

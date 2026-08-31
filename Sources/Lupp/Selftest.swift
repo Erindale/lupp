@@ -321,6 +321,46 @@ enum Selftest {
               abs(Int(r[3][0]) - Int(p[3][0])) <= 2 && abs(Int(r[2][0]) - Int(p[2][0])) <= 2,
               detail: "white \(r[3]) grey \(r[2])")
 
+        // The linear grade chain. Defaults must be a true no-op, or every image
+        // is subtly altered just by opening it.
+        var neutral = plain
+        neutral.whiteBalance = SIMD3(1, 1, 1)
+        neutral.contrast = 1
+        guard let n = pixels(neutral) else { return fail("grade", "export failed") }
+        let unchanged = zip(p, n).allSatisfy { a, b in
+            zip(a, b).allSatisfy { abs(Int($0) - Int($1)) <= 1 }
+        }
+        check("neutral light settings change nothing", unchanged,
+              detail: "before \(p[2]) after \(n[2])")
+
+        // +1 EV doubles the linear value. sRGB 128 decodes to linear 0.21586;
+        // doubled that is 0.43172; re-encoded, 1.055 * 0.43172^(1/2.4) - 0.055
+        // = 0.6885, which is 176 of 255.
+        var pushed = plain
+        pushed.exposureEV = 1
+        guard let e = pixels(pushed) else { return fail("exposure", "export failed") }
+        check("+1 EV doubles linear mid grey", abs(Int(e[2][0]) - 176) <= 2,
+              detail: "grey became \(e[2][0]), want ~176")
+
+        // White balance is a per-channel linear gain, so only its channel moves.
+        var warmed = plain
+        warmed.whiteBalance = SIMD3(1.5, 1, 1)
+        guard let w = pixels(warmed) else { return fail("white balance", "export failed") }
+        check("white balance moves only its own channel",
+              w[2][0] > p[2][0] + 10 && abs(Int(w[2][1]) - Int(p[2][1])) <= 1,
+              detail: "grey \(p[2]) -> \(w[2])")
+
+        // Contrast pivots on 0.18: mid grey at 0.2159 sits just above the pivot,
+        // so more contrast should lift it slightly, and black must stay black.
+        var punchy = plain
+        punchy.contrast = 1.6
+        guard let k = pixels(punchy) else { return fail("contrast", "export failed") }
+        check("contrast pivots around 0.18, leaving pure red's zero channels at zero",
+              k[0][1] <= 1 && k[0][2] <= 1,
+              detail: "red became \(k[0])")
+        check("contrast above 1 lifts values above the pivot", k[2][0] >= p[2][0],
+              detail: "grey \(p[2][0]) -> \(k[2][0])")
+
         // Export end to end: render, write a real file, read it back and compare.
         // Covers the encode, the CGImage construction and the ImageIO write, none
         // of which the in-memory check above touches.

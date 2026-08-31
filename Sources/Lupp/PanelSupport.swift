@@ -41,6 +41,10 @@ class SidePanel: NSView {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
+        // Nothing in a panel is ever wider than the panel, so sideways motion can
+        // only ever be an accident — a trackpad swipe with a little drift in it.
+        scroll.hasHorizontalScroller = false
+        scroll.horizontalScrollElasticity = .none
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         scroll.verticalScroller = OverlayScroller()

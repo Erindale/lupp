@@ -206,6 +206,15 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             self.canvas.display.tetraEnabled = enabled
             self.rememberGrade()
         }
+        grade.onLight = { [weak self] ev, wb, contrast, pivot in
+            guard let self else { return }
+            self.canvas.display.exposureEV = ev
+            self.canvas.display.whiteBalance = wb
+            self.canvas.display.contrast = contrast
+            self.canvas.display.contrastPivot = pivot
+            self.rememberGrade()
+            self.recomputeScopes()
+        }
         grade.onSavePreset = { [weak self] in self?.savePreset() }
         grade.onUsePreset = { [weak self] name in
             guard let self, let p = PresetStore.all.first(where: { $0.name == name }) else { return }

@@ -13,10 +13,18 @@ struct Preset: Codable, Equatable {
     var exposureEV: Float
     var lutPath: String?
     var lutAmount: Float
-    /// 18 numbers: six corners, RGB each, in ChannelOrder R Y G C B M.
+    /// 18 numbers: six corners, RGB each. The order here is this encoding's own
+    /// (R Y G C B M) and is only ever read back by `unflatten`; the panel uses
+    /// `TetraLayout`'s order. Both address the same named struct fields, so the
+    /// two orderings never meet.
     var tetra: [Float]
     var tetraAmount: Float
     var tetraEnabled: Bool
+    /// Optional so presets saved before these existed still decode — a missing
+    /// key means "the neutral value", which is exactly what it meant then.
+    var whiteBalance: [Float]?
+    var contrast: Float?
+    var contrastPivot: Float?
 
     static func from(_ d: Renderer.DisplayState, lutPath: String?) -> Preset {
         Preset(name: "",
@@ -26,7 +34,10 @@ struct Preset: Codable, Equatable {
                lutAmount: d.lutAmount,
                tetra: Preset.flatten(d.tetra),
                tetraAmount: d.tetraAmount,
-               tetraEnabled: d.tetraEnabled)
+               tetraEnabled: d.tetraEnabled,
+               whiteBalance: [d.whiteBalance.x, d.whiteBalance.y, d.whiteBalance.z],
+               contrast: d.contrast,
+               contrastPivot: d.contrastPivot)
     }
 
     /// Applies everything except the LUT, which the caller must load from disk.
@@ -37,6 +48,10 @@ struct Preset: Codable, Equatable {
         d.tetra = Preset.unflatten(tetra)
         d.tetraAmount = tetraAmount
         d.tetraEnabled = tetraEnabled
+        if let w = whiteBalance, w.count == 3 { d.whiteBalance = SIMD3(w[0], w[1], w[2]) }
+        else { d.whiteBalance = SIMD3(1, 1, 1) }
+        d.contrast = contrast ?? 1
+        d.contrastPivot = contrastPivot ?? 0.18
     }
 
     static func flatten(_ t: Renderer.TetraCorners) -> [Float] {

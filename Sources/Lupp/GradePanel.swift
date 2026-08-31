@@ -13,6 +13,8 @@ final class GradePanel: SidePanel {
     var onPickLUT: ((String?) -> Void)?
     var onRemoveLUT: ((String) -> Void)?
     var onTetra: ((Renderer.TetraCorners, Float, Bool) -> Void)?
+    /// exposure EV, white balance gains, contrast, pivot
+    var onLight: ((Float, SIMD3<Float>, Float, Float) -> Void)?
     var onSavePreset: (() -> Void)?
     var onUsePreset: ((String) -> Void)?
     var onDeletePreset: ((String) -> Void)?
@@ -26,6 +28,15 @@ final class GradePanel: SidePanel {
     private let lutSlider = NSSlider(value: 100, minValue: 0, maxValue: 100,
                                      target: nil, action: nil)
 
+    private lazy var exposureRow = LabelledSliderRow(label: "Exposure", initial: 0,
+                                                    span: 5, decimals: 2)
+    private lazy var contrastRow = LabelledSliderRow(label: "Contrast", initial: 1, span: 0.9)
+    private lazy var pivotRow = LabelledSliderRow(label: "Pivot", initial: 0.18, span: 0.17)
+    private lazy var wbRows = [
+        LabelledSliderRow(label: "Red", initial: 1, span: 0.5),
+        LabelledSliderRow(label: "Green", initial: 1, span: 0.5),
+        LabelledSliderRow(label: "Blue", initial: 1, span: 0.5),
+    ]
     private var tetraRows: [TetraSliderRow] = []
     private let tetraAmount = NSSlider(value: 100, minValue: 0, maxValue: 100,
                                        target: nil, action: nil)
@@ -56,6 +67,11 @@ final class GradePanel: SidePanel {
         lutLabel.textColor = .tertiaryLabelColor
         lutLabel.lineBreakMode = .byTruncatingMiddle
 
+        let lightRows = [exposureRow, contrastRow, pivotRow]
+        let balanceRows = wbRows
+        for r in lightRows + balanceRows {
+            r.onChange = { [weak self] in self?.lightChanged() }
+        }
         let tetraRowViews = buildTetraRows()
         style(tetraAmount)
         tetraAmount.target = self
@@ -80,13 +96,22 @@ final class GradePanel: SidePanel {
         let lutNote = caption("Applied after the view transform, in display space. A LUT authored for log input won’t be right here.")
         let exportNote = caption("Writes the image as shown — transform, LUT, grade and exposure baked in, at full resolution.")
 
+        let lightNote = caption("Linear, before the view transform — exposure and balance behave like light, not like edits to a finished picture. Contrast pivots on 0.18 scene grey.")
+
         var column: [NSView] = [
-            sectionLabel("LUT"), lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
+            sectionLabel("Light"), exposureRow, contrastRow, pivotRow,
+            sectionLabel("White balance"), wbRows[0], wbRows[1], wbRows[2],
+            lightNote,
             separator(),
             sectionLabel("Grade — tetrahedral"),
         ]
         column += tetraRowViews
-        column += [caption("Mix"), tetraAmount, tetraButtons, tetraNote,
+        column += [caption("Mix"), tetraAmount, tetraButtons, tetraNote]
+
+        // Order down the panel is the order the pixels travel: light, then the
+        // cube warp, then the LUT on top, then what to do with the result.
+        column += [separator(),
+                   sectionLabel("LUT"), lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
                    separator(),
                    sectionLabel("Presets"), presetPopup, presetButtons,
                    separator(),
@@ -94,9 +119,9 @@ final class GradePanel: SidePanel {
 
         install(column: column,
                 fullWidth: [lutPopup, lutButtons, lutLabel, lutSlider, lutNote,
-                            tetraAmount, tetraButtons, tetraNote,
+                            tetraAmount, tetraButtons, tetraNote, lightNote,
                             presetPopup, presetButtons, exportButton, exportNote]
-                        + tetraRowViews)
+                        + tetraRowViews + lightRows + balanceRows)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -127,6 +152,14 @@ final class GradePanel: SidePanel {
         return v
     }
 
+    private func lightChanged() {
+        emit {
+            onLight?(exposureRow.value,
+                     SIMD3(wbRows[0].value, wbRows[1].value, wbRows[2].value),
+                     contrastRow.value, pivotRow.value)
+        }
+    }
+
     @objc private func tetraChanged(_ sender: Any?) {
         let corners = TetraLayout.corners(from: currentValues())
         let amount = Float(tetraAmount.doubleValue / 100)
@@ -136,9 +169,11 @@ final class GradePanel: SidePanel {
 
     @objc private func tetraButtonPressed(_ sender: NSSegmentedControl) {
         guard sender.selectedSegment == 0 else { emit { onSavePreset?() }; return }
-        for row in tetraRows { row.value = TetraLayout.identity[row.corner][row.component] }
+        for row in tetraRows { row.resetToDefault() }
+        for row in [exposureRow, contrastRow, pivotRow] + wbRows { row.resetToDefault() }
         tetraAmount.doubleValue = 100
         tetraChanged(nil)
+        lightChanged()
     }
 
     // MARK: - LUT and presets
@@ -209,6 +244,12 @@ final class GradePanel: SidePanel {
         let v = TetraLayout.values(from: display.tetra)
         for row in tetraRows { row.value = v[row.corner][row.component] }
         tetraAmount.doubleValue = Double(display.tetraAmount) * 100
+        exposureRow.value = display.exposureEV
+        contrastRow.value = display.contrast
+        pivotRow.value = display.contrastPivot
+        wbRows[0].value = display.whiteBalance.x
+        wbRows[1].value = display.whiteBalance.y
+        wbRows[2].value = display.whiteBalance.z
 
         if let name = display.lutName {
             lutLabel.stringValue = name
