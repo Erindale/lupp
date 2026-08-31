@@ -21,20 +21,34 @@ final class Renderer {
     private var texture: MTLTexture?
     private var imageSize = CGSize.zero
 
+    private var lutTexture: MTLTexture?
+    private var lutDomainMin = SIMD4<Float>(0, 0, 0, 0)
+    private var lutDomainMax = SIMD4<Float>(1, 1, 1, 1)
+    /// Bound whenever no LUT is loaded. Metal wants a texture at the slot even
+    /// though the branch that samples it is switched off.
+    private var identityLUT: MTLTexture?
+    private var lutSampler: MTLSamplerState?
+
     /// Above this scale you are inspecting pixels, so show them as squares rather
     /// than a smooth interpolation of pixels that aren't in the file.
     static let nearestThreshold: CGFloat = 2.0
 
     struct Uniforms {
         var rect: SIMD4<Float>
+        var lutDomainMin: SIMD4<Float>
+        var lutDomainMax: SIMD4<Float>
         var exposure: Float
         var checkerSize: Float
+        var lutAmount: Float
         var showChecker: UInt32
         var viewTransform: UInt32
         var channel: UInt32
         var showClipping: UInt32
         var falseColour: UInt32
-        var _pad: UInt32 = 0
+        var lutEnabled: UInt32
+        var _pad0: UInt32 = 0
+        var _pad1: UInt32 = 0
+        var _pad2: UInt32 = 0
     }
 
     struct DisplayState {
@@ -43,6 +57,8 @@ final class Renderer {
         var channel: ChannelView = .rgb
         var showClipping = false
         var falseColour = false
+        var lutAmount: Float = 1
+        var lutName: String?
     }
 
     init?(pixelFormat: MTLPixelFormat) {
@@ -74,6 +90,72 @@ final class Renderer {
         guard let n = mk(.nearest), let l = mk(.linear) else { return nil }
         nearest = n
         linear = l
+
+        let ls = MTLSamplerDescriptor()
+        ls.minFilter = .linear
+        ls.magFilter = .linear
+        ls.sAddressMode = .clampToEdge
+        ls.tAddressMode = .clampToEdge
+        ls.rAddressMode = .clampToEdge
+        lutSampler = device.makeSamplerState(descriptor: ls)
+        identityLUT = Renderer.makeIdentityLUT(device: device)
+    }
+
+    // MARK: - LUT
+
+    /// Trilinear sampling of a 3D texture is exactly what a cube LUT means, so
+    /// the GPU does the interpolation the format was designed around.
+    func loadLUT(_ lut: CubeLUT) -> Bool {
+        let n = lut.size
+        let desc = MTLTextureDescriptor()
+        desc.textureType = .type3D
+        desc.pixelFormat = .rgba16Float      // universally filterable; 32-bit float is not
+        desc.width = n; desc.height = n; desc.depth = n
+        desc.usage = .shaderRead
+        desc.storageMode = .shared
+        guard let tex = device.makeTexture(descriptor: desc) else { return false }
+
+        var half = [UInt16](repeating: 0, count: lut.rgba.count)
+        for i in 0..<lut.rgba.count { half[i] = Float16(lut.rgba[i]).bitPattern }
+        half.withUnsafeBytes { raw in
+            tex.replace(region: MTLRegionMake3D(0, 0, 0, n, n, n), mipmapLevel: 0, slice: 0,
+                        withBytes: raw.baseAddress!,
+                        bytesPerRow: n * 8, bytesPerImage: n * n * 8)
+        }
+        lutTexture = tex
+        lutDomainMin = SIMD4(lut.domainMin, 0)
+        lutDomainMax = SIMD4(lut.domainMax, 1)
+        return true
+    }
+
+    func clearLUT() { lutTexture = nil }
+
+    var hasLUT: Bool { lutTexture != nil }
+
+    private static func makeIdentityLUT(device: MTLDevice) -> MTLTexture? {
+        let n = 2
+        let desc = MTLTextureDescriptor()
+        desc.textureType = .type3D
+        desc.pixelFormat = .rgba16Float
+        desc.width = n; desc.height = n; desc.depth = n
+        desc.usage = .shaderRead
+        desc.storageMode = .shared
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
+        var data = [UInt16](repeating: 0, count: n * n * n * 4)
+        var i = 0
+        for b in 0..<n { for g in 0..<n { for r in 0..<n {
+            data[i] = Float16(Float(r)).bitPattern
+            data[i + 1] = Float16(Float(g)).bitPattern
+            data[i + 2] = Float16(Float(b)).bitPattern
+            data[i + 3] = Float16(1).bitPattern
+            i += 4
+        }}}
+        data.withUnsafeBytes { raw in
+            tex.replace(region: MTLRegionMake3D(0, 0, 0, n, n, n), mipmapLevel: 0, slice: 0,
+                        withBytes: raw.baseAddress!,
+                        bytesPerRow: n * 8, bytesPerImage: n * n * 8)
+        }
+        return tex
     }
 
     // MARK: - Upload
@@ -135,17 +217,23 @@ final class Renderer {
                 Float(1 - y0 / vh * 2))   // top edge
 
             var u = Uniforms(rect: rect,
+                             lutDomainMin: lutDomainMin,
+                             lutDomainMax: lutDomainMax,
                              exposure: pow(2, display.exposureEV),
                              checkerSize: Float(12 * backingScale),
+                             lutAmount: display.lutAmount,
                              showChecker: 1,
                              viewTransform: UInt32(display.viewTransform.rawValue),
                              channel: UInt32(display.channel.rawValue),
                              showClipping: display.showClipping ? 1 : 0,
-                             falseColour: display.falseColour ? 1 : 0)
+                             falseColour: display.falseColour ? 1 : 0,
+                             lutEnabled: lutTexture != nil ? 1 : 0)
             enc.setRenderPipelineState(pipeline)
             enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
             enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
             enc.setFragmentTexture(tex, index: 0)
+            enc.setFragmentTexture(lutTexture ?? identityLUT, index: 1)
+            if let lutSampler { enc.setFragmentSamplerState(lutSampler, index: 1) }
             enc.setFragmentSamplerState(
                 viewport.scale >= Renderer.nearestThreshold ? nearest : linear, index: 0)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -170,14 +258,20 @@ final class Renderer {
 
     struct Uniforms {
         float4 rect;
+        float4 lutDomainMin;
+        float4 lutDomainMax;
         float  exposure;
         float  checkerSize;
+        float  lutAmount;
         uint   showChecker;
         uint   viewTransform;
         uint   channel;
         uint   showClipping;
         uint   falseColour;
-        uint   pad;
+        uint   lutEnabled;
+        uint   pad0;
+        uint   pad1;
+        uint   pad2;
     };
 
     // The drawable is extended-LINEAR sRGB: CoreAnimation applies the display
@@ -288,7 +382,9 @@ final class Renderer {
 
     fragment float4 lupp_fragment(VOut in [[stage_in]],
                                   texture2d<float> tex [[texture(0)]],
+                                  texture3d<float> lut [[texture(1)]],
                                   sampler smp [[sampler(0)]],
+                                  sampler lutSmp [[sampler(1)]],
                                   constant Uniforms &u [[buffer(0)]]) {
         float4 c = tex.sample(smp, in.uv);
         float3 rgb = c.rgb * u.exposure;
@@ -315,6 +411,18 @@ final class Renderer {
         if (any(c.rgb * u.exposure > 1.0)) { srcLuma = max(srcLuma, 1.0); }
 
         rgb = applyView(rgb, u.viewTransform);
+
+        // A creative .cube LUT expects display-encoded input, so it goes on after
+        // the view transform, in that domain, and comes back to linear for the
+        // drawable. A LUT authored for log input will not be right here — that
+        // needs an input transform Lupp doesn't have yet.
+        if (u.lutEnabled != 0u && u.lutAmount > 0.0) {
+            float3 enc = linearToSrgb(rgb);
+            float3 span = max(u.lutDomainMax.xyz - u.lutDomainMin.xyz, 1e-6);
+            float3 idx = clamp((enc - u.lutDomainMin.xyz) / span, 0.0, 1.0);
+            float3 looked = lut.sample(lutSmp, idx).rgb;
+            rgb = srgbToLinear(mix(enc, looked, u.lutAmount));
+        }
 
         if (u.falseColour != 0u) {
             rgb = srgbToLinear(falseColourOf(srcLuma));

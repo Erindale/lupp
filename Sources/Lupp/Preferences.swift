@@ -39,6 +39,12 @@ enum Preferences {
         UserDefaults.standard.set(t.rawValue, forKey: key)
     }
 
+    /// The LUT you were last using, reloaded on launch.
+    static var lastLUTPath: String? {
+        get { UserDefaults.standard.string(forKey: "lastLUTPath") }
+        set { UserDefaults.standard.set(newValue, forKey: "lastLUTPath") }
+    }
+
     /// Flips scroll-zoom direction. Present because no amount of reasoning about
     /// `isDirectionInvertedFromDevice` settles what a given mouse and driver
     /// combination will actually send — this makes it one click to correct.

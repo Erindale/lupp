@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// One window, one image, plus its folder for arrow-key navigation.
 final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSWindowDelegate {
@@ -57,6 +58,15 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             window.setFrameOrigin(NSPoint(x: last.minX + 24, y: last.minY - 24))
         }
         applyScopesVisibility(animated: false)
+        // Reload the LUT you were last using, so it survives a relaunch.
+        if let path = Preferences.lastLUTPath {
+            let u = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: path) {
+                applyLUT(at: u, announceFailure: false)
+            } else {
+                Preferences.lastLUTPath = nil
+            }
+        }
         open(url: url)
     }
 
@@ -131,6 +141,15 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         scopes.onFalseColour = { [weak self] on in
             self?.canvas.display.falseColour = on
         }
+        scopes.onLoadLUT = { [weak self] in self?.loadLUT() }
+        scopes.onClearLUT = { [weak self] in
+            guard let self else { return }
+            self.canvas.clearLUT()
+            Preferences.lastLUTPath = nil
+        }
+        scopes.onLUTAmount = { [weak self] a in
+            self?.canvas.display.lutAmount = a
+        }
         scopes.onViewTransform = { [weak self] t in
             guard let self else { return }
             Preferences.setViewTransform(t, sceneLinear: self.currentIsSceneLinear)
@@ -140,6 +159,38 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     private var currentIsSceneLinear: Bool { canvas.image?.isSceneLinear ?? false }
+
+    private func loadLUT() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        // .cube has no registered system type, so declare one for the filter.
+        panel.allowedContentTypes = [UTType(filenameExtension: "cube") ?? .data]
+        panel.message = "Choose a .cube LUT"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        applyLUT(at: url, announceFailure: true)
+    }
+
+    @discardableResult
+    private func applyLUT(at url: URL, announceFailure: Bool) -> Bool {
+        do {
+            let lut = try CubeLUT.parse(url: url)
+            guard canvas.loadLUT(lut) else { throw CubeLUT.ParseError.unreadable(url) }
+            var name = "\(lut.title) · \(lut.size)³"
+            if lut.wasOneDimensional { name += " · from 1D" }
+            canvas.display.lutName = name
+            Preferences.lastLUTPath = url.path
+            return true
+        } catch {
+            if announceFailure {
+                let a = NSAlert()
+                a.messageText = "Couldn’t load that LUT"
+                a.informativeText = error.localizedDescription
+                a.runModal()
+            }
+            return false
+        }
+    }
 
     private func syncPanelControls() {
         scopes.show(display: canvas.display,

@@ -86,6 +86,18 @@ final class ImageCanvasView: MTKView {
 
     // MARK: - Content
 
+    func loadLUT(_ lut: CubeLUT) -> Bool {
+        let ok = renderer?.loadLUT(lut) ?? false
+        needsDisplay = true
+        return ok
+    }
+
+    func clearLUT() {
+        renderer?.clearLUT()
+        display.lutName = nil
+        needsDisplay = true
+    }
+
     func show(_ img: FloatImage?) {
         image = img
         if let img {

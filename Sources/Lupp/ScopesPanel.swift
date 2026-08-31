@@ -8,6 +8,9 @@ final class ScopesPanel: NSView {
     var onClipping: ((Bool) -> Void)?
     var onFalseColour: ((Bool) -> Void)?
     var onViewTransform: ((ViewTransform) -> Void)?
+    var onLoadLUT: (() -> Void)?
+    var onClearLUT: (() -> Void)?
+    var onLUTAmount: ((Float) -> Void)?
 
     private let channelControl = NSSegmentedControl(
         labels: ChannelView.allCases.map(\.label),
@@ -27,12 +30,33 @@ final class ScopesPanel: NSView {
     private let vectorscope = VectorscopeView(title: "Vectorscope", heightRatio: 1)
     private let stats = NSTextField(labelWithString: "")
 
+    private let lutButtons = NSSegmentedControl(labels: ["Load LUT…", "Clear"],
+                                                trackingMode: .momentary, target: nil, action: nil)
+    private let lutLabel = NSTextField(labelWithString: "No LUT")
+    private let lutSlider = NSSlider(value: 100, minValue: 0, maxValue: 100,
+                                     target: nil, action: nil)
+
     private let transformPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let transformNote = NSTextField(labelWithString: "")
     private let note = NSTextField(labelWithString: "Scopes read sRGB-encoded values.")
 
     /// Held so switching parade mode is instant — both rasters already exist.
     private var current: Scopes?
+
+    /// True while a control's own action is running.
+    ///
+    /// The action mutates the canvas's display state, which reports back and asks
+    /// this panel to re-sync its controls — landing inside AppKit's still-running
+    /// click handling and stomping the change the click just made. That made the
+    /// overlay toggles impossible to switch off: the deselect was undone before
+    /// the mouse came up.
+    private var handlingControlAction = false
+
+    private func emit(_ body: () -> Void) {
+        handlingControlAction = true
+        body()
+        handlingControlAction = false
+    }
 
     init() {
         super.init(frame: .zero)
@@ -60,6 +84,7 @@ final class ScopesPanel: NSView {
         overlayControl.translatesAutoresizingMaskIntoConstraints = false
 
         buildTransformControls()
+        buildLUTControls()
 
         stats.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         stats.textColor = .secondaryLabelColor
@@ -76,7 +101,8 @@ final class ScopesPanel: NSView {
             channelRow, overlayControl,
             histogram, parade, vectorscope, cie,
             stats,
-            separator(), transformPopup, transformNote, note,
+            separator(), transformPopup, transformNote,
+            lutButtons, lutLabel, lutSlider, note,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -89,6 +115,8 @@ final class ScopesPanel: NSView {
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.verticalScroller = OverlayScroller()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         // Flipped: an NSScrollView's document view is bottom-origin by default,
         // which pins short content to the bottom of the panel instead of the top.
@@ -111,7 +139,8 @@ final class ScopesPanel: NSView {
             stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
         ]
         for v in [channelControl, overlayControl, histogram, parade, vectorscope, cie, stats,
-                  transformPopup, transformNote, note] as [NSView] {
+                  transformPopup, transformNote, lutButtons, lutLabel, lutSlider,
+                  note] as [NSView] {
             c.append(v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28))
         }
         NSLayoutConstraint.activate(c)
@@ -140,6 +169,38 @@ final class ScopesPanel: NSView {
         return channelControl
     }
 
+    /// A creative LUT sits on top of the view transform, so it lives directly
+    /// under it — the panel reads top to bottom as the order the pixels travel.
+    private func buildLUTControls() {
+        lutButtons.segmentDistribution = .fillEqually
+        lutButtons.segmentStyle = .rounded
+        lutButtons.controlSize = .small
+        lutButtons.font = .systemFont(ofSize: 10)
+        lutButtons.target = self
+        lutButtons.action = #selector(lutButtonPressed(_:))
+        lutButtons.translatesAutoresizingMaskIntoConstraints = false
+
+        lutLabel.font = .systemFont(ofSize: 9)
+        lutLabel.textColor = .tertiaryLabelColor
+        lutLabel.lineBreakMode = .byTruncatingMiddle
+
+        lutSlider.controlSize = .small
+        // Neutral fill, like every other control here — the accent colour in a
+        // scopes panel reads as information about the image.
+        lutSlider.trackFillColor = NSColor(white: 0.52, alpha: 1)
+        lutSlider.target = self
+        lutSlider.action = #selector(lutAmountChanged(_:))
+        lutSlider.isEnabled = false
+    }
+
+    @objc private func lutButtonPressed(_ sender: NSSegmentedControl) {
+        emit { sender.selectedSegment == 0 ? onLoadLUT?() : onClearLUT?() }
+    }
+
+    @objc private func lutAmountChanged(_ sender: NSSlider) {
+        emit { onLUTAmount?(Float(sender.doubleValue / 100)) }
+    }
+
     private func buildTransformControls() {
         transformPopup.controlSize = .small
         transformPopup.font = .systemFont(ofSize: 11)
@@ -160,17 +221,19 @@ final class ScopesPanel: NSView {
 
     @objc private func channelChanged(_ sender: NSSegmentedControl) {
         guard let ch = ChannelView(rawValue: sender.selectedSegment) else { return }
-        onChannel?(ch)
+        emit { onChannel?(ch) }
     }
 
     @objc private func overlayChanged(_ sender: NSSegmentedControl) {
-        onClipping?(sender.isSelected(forSegment: 0))
-        onFalseColour?(sender.isSelected(forSegment: 1))
+        emit {
+            onClipping?(sender.isSelected(forSegment: 0))
+            onFalseColour?(sender.isSelected(forSegment: 1))
+        }
     }
 
     @objc private func transformChanged(_ sender: NSPopUpButton) {
         guard let t = ViewTransform(rawValue: sender.selectedTag()) else { return }
-        onViewTransform?(t)
+        emit { onViewTransform?(t) }
     }
 
     @objc private func paradeModeChanged(_ sender: NSSegmentedControl) {
@@ -185,10 +248,23 @@ final class ScopesPanel: NSView {
     /// Reflect the state the canvas is actually in, so the panel can't drift out
     /// of sync with what's on screen after an image loads and re-detects.
     func show(display: Renderer.DisplayState, detected: ViewTransform?, sceneLinear: Bool) {
-        channelControl.selectedSegment = display.channel.rawValue
-        overlayControl.setSelected(display.showClipping, forSegment: 0)
-        overlayControl.setSelected(display.falseColour, forSegment: 1)
-        transformPopup.selectItem(withTag: display.viewTransform.rawValue)
+        // Never write back into a control that is mid-click; only reflect state
+        // that changed from somewhere else, such as a keyboard shortcut.
+        if !handlingControlAction {
+            channelControl.selectedSegment = display.channel.rawValue
+            overlayControl.setSelected(display.showClipping, forSegment: 0)
+            overlayControl.setSelected(display.falseColour, forSegment: 1)
+            transformPopup.selectItem(withTag: display.viewTransform.rawValue)
+        }
+
+        if let name = display.lutName {
+            lutLabel.stringValue = name
+            lutSlider.isEnabled = true
+            if !handlingControlAction { lutSlider.doubleValue = Double(display.lutAmount) * 100 }
+        } else {
+            lutLabel.stringValue = "No LUT"
+            lutSlider.isEnabled = false
+        }
 
         if let detected {
             let source = sceneLinear

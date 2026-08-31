@@ -25,6 +25,7 @@ enum Selftest {
         viewportAnchorHolds()
         openingZoomRules(in: dir)
         scopesReadDisplayEncoded(in: dir)
+        cubeLUTParses(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -220,6 +221,49 @@ enum Selftest {
             }
         }
         return best
+    }
+
+    /// The .cube format stores red varying fastest. Getting that order wrong
+    /// swaps the R and B axes of every LUT and looks almost plausible, so pin it
+    /// with a LUT whose value encodes its own coordinates.
+    private static func cubeLUTParses(in dir: URL) {
+        let n = 4
+        var lines = ["# test", "TITLE \"Coords\"", "LUT_3D_SIZE \(n)"]
+        for b in 0..<n {
+            for g in 0..<n {
+                for r in 0..<n {
+                    let d = Float(n - 1)
+                    lines.append(String(format: "%.6f %.6f %.6f",
+                                        Float(r) / d, Float(g) / d, Float(b) / d))
+                }
+            }
+        }
+        let url = dir.appendingPathComponent("coords.cube")
+        guard (try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)) != nil,
+              let lut = try? CubeLUT.parse(url: url) else {
+            return fail("cube LUT", "could not parse")
+        }
+
+        check("cube LUT reads its size", lut.size == n, detail: "got \(lut.size)")
+        check("cube LUT entry count", lut.rgba.count == n * n * n * 4,
+              detail: "got \(lut.rgba.count)")
+
+        // Index 1 is (r:1, g:0, b:0) if red varies fastest.
+        let second = (lut.rgba[4], lut.rgba[5], lut.rgba[6])
+        check("cube LUT stores red fastest",
+              near(second.0, 1.0 / 3, tol: 0.001) && second.1 == 0 && second.2 == 0,
+              detail: String(format: "entry 1 = %.3f %.3f %.3f, want 0.333 0 0",
+                             second.0, second.1, second.2))
+
+        // A 1D LUT must expand to a cube rather than being read as 3D data.
+        let one = dir.appendingPathComponent("curve.cube")
+        let curve = ["LUT_1D_SIZE 4", "0 0 0", "0.25 0.25 0.25", "0.5 0.5 0.5", "1 1 1"]
+        guard (try? curve.joined(separator: "\n").write(to: one, atomically: true, encoding: .utf8)) != nil,
+              let lut1 = try? CubeLUT.parse(url: one) else {
+            return fail("1D cube LUT", "could not parse")
+        }
+        check("1D LUT expands to a cube", lut1.wasOneDimensional && lut1.size == 4,
+              detail: "1D=\(lut1.wasOneDimensional) size=\(lut1.size)")
     }
 
     // MARK: - Helpers
