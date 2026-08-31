@@ -15,9 +15,17 @@ final class TetraSliderRow: NSView {
     private let field = NSTextField()
     var onChange: (() -> Void)?
 
-    /// Beyond the cube in both directions: corners can be pushed past the
-    /// primaries for a stronger warp, or inverted, without the control fighting.
-    static let range: ClosedRange<Double> = -1...2
+    /// How far either side of its default each slider reaches.
+    ///
+    /// The range is centred on the parameter's *identity* value rather than being
+    /// the same absolute span for every row, so a handle at the middle always
+    /// means "unchanged" and its distance from the middle reads directly as
+    /// deviation. That is why a default of 0.000 and one of 1.000 both sit
+    /// centred — the control answers "how far have I moved this", which is the
+    /// question you actually have while grading.
+    static let span: Double = 1.0
+
+    private let defaultValue: Float
 
     var value: Float {
         get { Float(slider.doubleValue) }
@@ -30,6 +38,7 @@ final class TetraSliderRow: NSView {
     init(label: String, corner: Int, component: Int, initial: Float) {
         self.corner = corner
         self.component = component
+        self.defaultValue = initial
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
@@ -39,8 +48,8 @@ final class TetraSliderRow: NSView {
         name.alignment = .right
         name.lineBreakMode = .byTruncatingTail
 
-        slider.minValue = TetraSliderRow.range.lowerBound
-        slider.maxValue = TetraSliderRow.range.upperBound
+        slider.minValue = Double(initial) - TetraSliderRow.span
+        slider.maxValue = Double(initial) + TetraSliderRow.span
         slider.controlSize = .small
         slider.trackFillColor = NSColor(white: 0.52, alpha: 1)
         slider.target = self

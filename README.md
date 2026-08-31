@@ -101,6 +101,11 @@ makes it a colour *warp* rather than a tint: it cannot push a neutral off
 neutral. Eighteen sliders, laid out as Resolve lays out the DCTL, with a mix
 amount and a reset.
 
+Each slider is **centred on its own identity value** rather than sharing one
+absolute range, so a handle in the middle always means "unchanged" and its
+distance from the middle reads directly as deviation. That's why a default of
+0.000 and one of 1.000 both start centred.
+
 **Presets** store the view transform, exposure, LUT choice and all eighteen
 corner values. Window size and zoom are deliberately excluded — they're how you
 were looking at an image, not what you did to it. *Apply Last* puts back the
