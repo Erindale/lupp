@@ -1119,6 +1119,24 @@ enum Selftest {
         check("a change made after writing counts again", changed != committed,
               detail: "an edit after export was not noticed")
 
+        // How you are looking at an image is not work done to it. Session
+        // records the channel and the overlays so a saved .lupp reopens the way
+        // you left it, and comparing those made an exported image count as
+        // unsaved the moment you pressed C.
+        var looking = d
+        looking.channel = .blue
+        looking.showClipping = true
+        let inspected = Session.from(looking, image: image, lutPath: nil, bookmark: false)
+        check("inspecting an image is not editing it",
+              ViewerWindowController.editContent(inspected)
+                  == ViewerWindowController.editContent(committed),
+              detail: "changing channel or overlay made an exported image look unsaved")
+        // But a real change still registers through the same comparison.
+        check("and a real change still registers past that",
+              ViewerWindowController.editContent(changed)
+                  != ViewerWindowController.editContent(committed),
+              detail: "normalising hid an actual edit")
+
         // The crop is part of it — undo excludes it, this must not.
         var cropped = d
         cropped.cropEnabled = true

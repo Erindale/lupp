@@ -710,7 +710,30 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// means: an image exported and then left alone is finished, and offering to
     /// write it again is offering to redo work and overwrite a file for no gain.
     func unsavedEditsMap() -> [URL: Session] {
-        allEdits().filter { url, session in committed[url] != session }
+        allEdits().filter { url, session in
+            committed[url].map(ViewerWindowController.editContent) != editContent(session)
+        }
+    }
+
+    /// A session reduced to what was actually *done* to the image.
+    ///
+    /// A Session records how you were looking at it as well as what you changed,
+    /// because a saved `.lupp` should reopen the way you left it. None of that is
+    /// work: switching to the blue channel or turning on the clipping overlay
+    /// after an export made the image count as unsaved again, which inflated
+    /// everything measured from that set — the button, the close warning, and the
+    /// "already written" number beside the re-export box, which is where it was
+    /// most visible because it went *down*.
+    static func editContent(_ s: Session) -> Session {
+        var n = s
+        n.channel = ChannelView.rgb.rawValue
+        n.showClipping = false
+        n.falseColour = false
+        return n
+    }
+
+    private func editContent(_ s: Session) -> Session {
+        ViewerWindowController.editContent(s)
     }
 
     func unsavedEdits() -> [URL] {
