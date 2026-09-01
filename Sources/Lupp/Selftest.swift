@@ -26,6 +26,8 @@ enum Selftest {
         exifOrientationApplied(in: dir)
         alphaIsStraight(in: dir)
         viewportAnchorHolds()
+        gradePanelReadsInPipelineOrder()
+        masterResetCoversEverySection()
         openingZoomRules(in: dir)
         scopesReadDisplayEncoded(in: dir)
         cubeLUTParses(in: dir)
@@ -821,6 +823,93 @@ enum Selftest {
         else { return false }
         CGImageDestinationAddImage(dest, cg, nil)
         return CGImageDestinationFinalize(dest)
+    }
+
+    /// The colour panel is meant to read top to bottom in the order the pixels
+    /// travel, and that order is a literal array — exactly the kind of thing that
+    /// gets reordered by hand and silently disagrees with the shader afterwards.
+    /// Walking the built panel is the only way to catch that, since the array is
+    /// local to the initialiser.
+    private static func gradePanelReadsInPipelineOrder() {
+        _ = NSApplication.shared          // AppKit needs waking before any view
+        let panel = GradePanel()
+
+        func titles(of view: NSView) -> [String] {
+            if let header = view as? SectionHeader {
+                return header.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
+                    .filter { !$0.isEmpty }
+            }
+            // A bare section label — "Presets", "Export" — carries no header.
+            // Section labels are uppercased and short; the captions beside them
+            // are sentences, which is what tells the two apart.
+            if let field = view as? NSTextField, !field.stringValue.isEmpty,
+               field.stringValue == field.stringValue.uppercased(),
+               field.stringValue.count < 20 {
+                return [field.stringValue]
+            }
+            return []
+        }
+
+        guard let stack = firstStack(in: panel) else {
+            return fail("grade panel order", "no stack view found")
+        }
+        let order = stack.arrangedSubviews.flatMap(titles).map { $0.uppercased() }
+
+        // Only the sections, in the sequence they must appear.
+        let wanted = ["GRADING", "LIGHT", "WHITE BALANCE", "TETRAHEDRAL",
+                      "SATURATION", "LUT", "PRESETS", "CROP", "EXPORT"]
+        let found = order.filter { wanted.contains($0) }
+        check("colour panel reads in pipeline order, crop last before export",
+              found == wanted, detail: "got \(found)")
+    }
+
+    /// The master reset has to put *every* section back, and each one it covers
+    /// must emit as well as move its control — a slider that returns to its
+    /// default while the renderer keeps the old value leaves the panel lying
+    /// about the picture. That is a wiring mistake with no visible symptom until
+    /// you look closely, and it has happened once already, so it is pinned here.
+    ///
+    /// The crop is deliberately excluded: it is a composition judged by eye, not
+    /// a value that can be dialled again, so a small arrow should not discard it.
+    private static func masterResetCoversEverySection() {
+        _ = NSApplication.shared
+        let panel = GradePanel()
+
+        var sawSaturation = false
+        var sawClearLUT = false
+        var sawCropReset = false
+        panel.onSaturation = { _ in sawSaturation = true }
+        panel.onClearLUT = { sawClearLUT = true }
+        panel.onCropReset = { sawCropReset = true }
+
+        guard let button = resetButton(named: "grading", in: panel) else {
+            return fail("master reset", "no reset control on the Grading header")
+        }
+        button.performClick(nil)
+
+        check("the master reset puts saturation back", sawSaturation,
+              detail: "onSaturation never fired")
+        check("the master reset clears the LUT", sawClearLUT,
+              detail: "onClearLUT never fired")
+        check("the master reset leaves the crop alone", !sawCropReset,
+              detail: "onCropReset fired and would have discarded a crop")
+    }
+
+    /// Found by the tooltip the header gives it, which is the only thing that
+    /// distinguishes it from the bypass beside it.
+    private static func resetButton(named section: String, in view: NSView) -> NSButton? {
+        if let b = view as? NSButton,
+           b.toolTip?.lowercased().hasPrefix("reset \(section)") == true { return b }
+        for sub in view.subviews {
+            if let b = resetButton(named: section, in: sub) { return b }
+        }
+        return nil
+    }
+
+    private static func firstStack(in view: NSView) -> NSStackView? {
+        if let s = view as? NSStackView, s.arrangedSubviews.count > 10 { return s }
+        for sub in view.subviews { if let s = firstStack(in: sub) { return s } }
+        return nil
     }
 
     private static func near(_ a: Float, _ b: Float, tol: Float) -> Bool { abs(a - b) <= tol }

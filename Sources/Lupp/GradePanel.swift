@@ -208,14 +208,17 @@ final class GradePanel: SidePanel {
                    caption("How much colour survives, taken after the cube warp — so pulling it to zero renders the luma of whatever the corners just did, and the six hue corners become a channel mixer for black and white.")]
 
         // Order down the panel is the order the pixels travel: light, then the
-        // cube warp, then saturation, then a display LUT last of all. Crop is
-        // not a colour operation and simply sits where it is convenient.
+        // cube warp, then saturation, then a display LUT last of all.
+        //
+        // Crop is not a colour operation and sits below the whole chain, next to
+        // export — which is the thing it most affects, since export writes the
+        // crop at its own pixel size.
         column += [separator(),
-                   cropHeader, cropAspect, cropApply, cropSize, cropNote,
-                   separator(),
                    lutHeader, lutPopup, lutButtons, lutLabel, lutInput, lutSlider, lutNote,
                    separator(),
                    sectionLabel("Presets"), presetPopup, presetButtons, savePresetButton,
+                   separator(),
+                   cropHeader, cropAspect, cropApply, cropSize, cropNote,
                    separator(),
                    sectionLabel("Export"), exportButton, exportNote]
 
@@ -283,14 +286,15 @@ final class GradePanel: SidePanel {
         emit { onTetra?(corners, amount, !corners.isIdentity) }
     }
 
-    /// Resetting the whole grade covers light, white balance, the cube and
-    /// saturation — every section that has to be put back must also *emit*, or
-    /// the slider returns to its default while the renderer keeps the old value
-    /// and the panel starts lying about the picture.
+    /// Resetting the whole grade covers light, white balance, the cube,
+    /// saturation and the LUT — every section that has to be put back must also
+    /// *emit*, or the control returns to its default while the renderer keeps
+    /// the old value and the panel starts lying about the picture.
     ///
-    /// The LUT and the crop are deliberately left alone: both are choices you
-    /// made rather than values you dialled, and silently discarding a crop is
-    /// not what a reset arrow should be able to do. Each has its own reset.
+    /// The crop is the one thing left alone. Everything else here is a value you
+    /// dialled and can dial again; a crop is a composition you judged by eye,
+    /// and throwing it away is not something a small reset arrow should be able
+    /// to do by surprise. It keeps its own reset.
     private func resetEverything() {
         for row in lightAndBalanceRows { row.resetToDefault() }
         saturationRow.resetToDefault()
@@ -299,6 +303,7 @@ final class GradePanel: SidePanel {
         lightChanged()
         tetraChanged(nil)
         emit { onSaturation?(1) }
+        emit { onClearLUT?() }
     }
 
     @objc private func cropApplyChanged(_ sender: NSSegmentedControl) {
