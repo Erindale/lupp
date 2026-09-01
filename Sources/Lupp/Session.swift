@@ -34,6 +34,9 @@ struct Session: Codable {
     var tetra: [Float]
     var tetraAmount: Float
     var tetraActive: Bool
+    /// Optional so sessions written before saturation existed still open.
+    var saturation: Float?
+    var saturationOn: Bool?
 
     var lutPath: String?
     var lutAmount: Float
@@ -73,6 +76,8 @@ struct Session: Codable {
                 tetra: Preset.flatten(d.tetra),
                 tetraAmount: d.tetraAmount,
                 tetraActive: d.tetraActive,
+                saturation: d.saturation,
+                saturationOn: d.saturationOn,
                 lutPath: lutPath,
                 lutAmount: d.lutAmount,
                 lutInput: d.lutInput.rawValue,
@@ -103,6 +108,8 @@ struct Session: Codable {
         d.tetra = Preset.unflatten(tetra)
         d.tetraAmount = tetraAmount
         d.tetraActive = tetraActive
+        if let saturation { d.saturation = saturation }
+        if let saturationOn { d.saturationOn = saturationOn }
         d.lutAmount = lutAmount
         d.lutInput = LUTInput(rawValue: lutInput) ?? .display
         if crop.count == 4 { d.crop = SIMD4(crop[0], crop[1], crop[2], crop[3]) }

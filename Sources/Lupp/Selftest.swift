@@ -473,6 +473,48 @@ enum Selftest {
               abs(Int(r[3][0]) - Int(p[3][0])) <= 2 && abs(Int(r[2][0]) - Int(p[2][0])) <= 2,
               detail: "white \(r[3]) grey \(r[2])")
 
+        // Saturation. Neutral has to be exact, or opening an image alters it.
+        var sat = plain
+        sat.saturation = 1
+        if let s1 = pixels(sat) {
+            let same = zip(p, s1).allSatisfy { a, b in
+                zip(a, b).allSatisfy { abs(Int($0) - Int($1)) <= 1 }
+            }
+            check("saturation at 1.0 changes nothing", same, detail: "red \(s1[0])")
+        }
+
+        sat.saturation = 0
+        guard let mono = pixels(sat) else { return fail("GPU saturation", "export failed") }
+        check("saturation at 0 is monochrome",
+              mono[0][0] == mono[0][1] && mono[0][1] == mono[0][2]
+                  && mono[1][0] == mono[1][1] && mono[1][1] == mono[1][2],
+              detail: "red became \(mono[0]), green \(mono[1])")
+        // Rec.709 luma: red is much darker than green, which is the whole reason
+        // a channel mixer is worth having.
+        check("monochrome uses luma weights, not an average",
+              mono[1][0] > mono[0][0] + 40,
+              detail: "red \(mono[0][0]) vs green \(mono[1][0])")
+
+        // The point of putting it after the cube warp: with red moved onto green,
+        // a red pixel must desaturate to green's luma rather than red's. If the
+        // order were the other way round these would be identical.
+        var mixed = sat                      // saturation 0
+        mixed.tetraActive = true
+        mixed.tetra.red = SIMD4<Float>(0, 1, 0, 0)
+        if let m = pixels(mixed) {
+            check("saturation follows the cube warp, not the source",
+                  Int(m[0][0]) > Int(mono[0][0]) + 40,
+                  detail: "warped red → \(m[0][0]), unwarped → \(mono[0][0])")
+        }
+
+        // Bypassing it must restore the colour rather than merely stop moving it.
+        var bypassed = sat                   // saturation 0
+        bypassed.saturationOn = false
+        if let b = pixels(bypassed) {
+            check("bypassing saturation restores the colour",
+                  b[0][0] > 250 && b[0][1] < 5, detail: "red \(b[0])")
+        }
+
         // The linear grade chain. Defaults must be a true no-op, or every image
         // is subtly altered just by opening it.
         var neutral = plain

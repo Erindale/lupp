@@ -309,10 +309,16 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             case .light:        d.lightOn = on
             case .whiteBalance: d.whiteBalanceOn = on
             case .tetra:        d.tetraOn = on
+            case .saturation:   d.saturationOn = on
             case .lut:          d.lutOn = on
             case .crop:         d.cropEnabled = on
             }
             self.canvas.display = d
+        }
+        grade.onSaturation = { [weak self] amount in
+            guard let self else { return }
+            self.canvas.display.saturation = amount
+            self.rememberGrade()
         }
         grade.onLUTInput = { [weak self] input in
             self?.canvas.display.lutInput = input

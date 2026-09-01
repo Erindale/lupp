@@ -19,6 +19,8 @@ struct Preset: Codable, Equatable {
     /// two orderings never meet.
     var tetra: [Float]
     var tetraAmount: Float
+    /// Optional so presets saved before saturation existed still load.
+    var saturation: Float?
     var tetraEnabled: Bool
     /// Optional so presets saved before these existed still decode — a missing
     /// key means "the neutral value", which is exactly what it meant then.
@@ -36,6 +38,7 @@ struct Preset: Codable, Equatable {
                lutAmount: d.lutAmount,
                tetra: Preset.flatten(d.tetra),
                tetraAmount: d.tetraAmount,
+               saturation: d.saturation,
                tetraEnabled: d.tetraActive,
                whiteBalance: [d.whiteBalance.x, d.whiteBalance.y, d.whiteBalance.z],
                contrast: d.contrast,
@@ -51,6 +54,7 @@ struct Preset: Codable, Equatable {
         d.lutAmount = lutAmount
         d.tetra = Preset.unflatten(tetra)
         d.tetraAmount = tetraAmount
+        d.saturation = saturation ?? 1
         d.tetraActive = tetraEnabled
         if let w = whiteBalance, w.count == 3 { d.whiteBalance = SIMD3(w[0], w[1], w[2]) }
         else { d.whiteBalance = SIMD3(1, 1, 1) }

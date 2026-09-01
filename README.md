@@ -1,14 +1,25 @@
+<img src="Icon/Lupp-organic-256.png" width="128" alt="Lupp">
+
 # Lupp
 
-A fast, colour-honest image viewer for macOS. *Lupp* is Swedish for the loupe you
-put on a lightbox to inspect a frame.
+**A fast, colour-honest image viewer for macOS.** *Lupp* is Swedish for the loupe
+you put on a lightbox to inspect a frame.
 
 Built to be a default image viewer that opens instantly and tells you the truth
-about what's in the file — including the parts above diffuse white.
+about what's in the file — including the parts above diffuse white. It reads 62
+formats, measures what it shows, and can grade and export without ever writing to
+your original.
 
 ```bash
+git clone https://github.com/Erindale/lupp && cd lupp
 ./build.sh && open Lupp.app
 ```
+
+![Lupp showing a photograph with the colour panel and inspector open](docs/screenshot-grading.png)
+
+*One window: the picture, the colour panel that changes it, and the inspector
+that measures it. Every colour in the chrome — including the backdrop behind the
+image — comes from a single adjustable number.*
 
 ## What it does
 
@@ -20,9 +31,19 @@ about what's in the file — including the parts above diffuse white.
   pan. Pinch to zoom on a trackpad.
 - **Eyedropper readout** — linear float RGB under the cursor, plus the sRGB hex,
   plus alpha, live as you move.
-- **A float pipeline throughout.** Everything decodes to linear 32-bit float, so
-  an EXR pixel at 8.0 is stored, reported and displayed as 8.0 rather than
-  clipped to white. HDR files are flagged with their peak value in the title bar.
+- **A linear-light pipeline.** Values are scene-referred throughout, so an EXR
+  pixel at 8.0 is reported and displayed as 8.0 rather than clipped to white. HDR
+  files are flagged with their peak value in the title bar.
+- **Storage is chosen per file.** An eight-bit, opaque, sRGB image — most
+  photographs — is kept as bytes and linearised by the GPU sampler, which is a
+  quarter of the memory and about a third of the time of expanding it to float.
+  Anything the bytes would lose (deeper than eight bits, alpha, a wider gamut,
+  scene-linear values) takes the float path. Nothing above the storage layer can
+  tell the difference; the numbers are identical either way.
+- **Decoded images are cached, and the next one is read ahead.** Going back to a
+  picture you've already seen is instant, and stepping forward decodes while
+  you're still looking at the current frame — which matters most over a network
+  share, where fetching the bytes costs more than decoding them.
 - **Exposure offset** (`E` / `⇧E`) to inspect into highlights or shadows.
 - **Arrow keys** step through the rest of the folder, numerically sorted so
   `frame_2` comes before `frame_10`.
@@ -34,25 +55,34 @@ about what's in the file — including the parts above diffuse white.
 - **Scopes measure the graded image, live.** They're computed from a small render
   through the same shader as the canvas, so they always agree with the picture and
   update as you drag a slider.
-- **Inspector** (⌥⌘I) — histogram, waveform (RGB parade, combined, or luma),
+- **Inspector** (`M`) — histogram, waveform (RGB parade, combined, or luma),
   vectorscope with a BT.709 graticule and skin-tone line, and a CIE 1931 xy plot
   with the spectral locus and Rec.709 / P3 / Rec.2020 gamut triangles. Plus
   per-channel min/max/mean and clipping percentages.
 - **Colour** — a LUT library, an 18-parameter tetrahedral grade, saved presets,
   and export.
+- **Every image opens unedited.** A grade belongs to the picture it was made for,
+  so it never carries into the next file, and no LUT is ever applied unless you
+  ask for one.
 - **Drag an image onto the window** to open it, as well as Finder and File ▸ Open.
 - **Display controls** in the same panel — isolate R/G/B/A/Luma, a clipping
   overlay, and an ARRI-style false-colour exposure ramp.
 - **View transforms** — Standard, AgX, ACES Filmic and Raw, defaulted from what
   the file is and overridable.
-- **`.cube` LUTs** — load a 3D (or 1D) LUT, with an intensity slider. It reloads
-  the one you were last using on launch.
+- **`.cube` LUTs** — load a 3D (or 1D) LUT, with an intensity slider, and log
+  input encodings for camera LUTs.
+- **Rotate** (⌘\[ / ⌘\]) for a file that is wrong about which way up it is —
+  applied to the decoded pixels, never written back to your original.
+- **Interface size** — 80% to 150%, for a 14" laptop or a 32" monitor at arm's
+  length.
 - **Camera RAW** — ARW, CR2/CR3, NEF, RAF, ORF, RW2, DNG and more, through
   Apple's RAW pipeline.
 
 The window is one continuous surface: the title bar, the canvas and the readout
 footer all share a single background colour, defined once and converted to linear
 for the Metal drawable so they can't drift apart.
+
+<img src="docs/screenshot-inspector.png" width="300" align="right" alt="The inspector panel">
 
 ## Colour spaces, all labelled
 
@@ -95,8 +125,12 @@ with the reference transforms.
 
 ## Grading
 
-The colour panel reads top to bottom in the order the pixels travel: light, then
-the cube warp, then a LUT on top, then what to do with the result.
+The chain runs: **light** in linear, then the **view transform**, then the
+**LUT**, then the **cube warp**, then **saturation**, then what to do with the
+result. The panel lists light, the cube warp and saturation in that order; the
+LUT sits lower down with the presets and export, so panel order and pipeline
+order agree everywhere except the LUT, which is applied before the cube warp
+rather than after it.
 
 **Every section has a bypass** beside its title, and there's a master one at the
 top (`B`). Lit means applied, dimmed means bypassed. A bypassed section keeps its
@@ -127,6 +161,12 @@ in those terms. All of it is applied in **linear, before the view transform**,
 so they behave like light rather than like edits to an already-rendered picture.
 Contrast pivots on 0.18 scene grey by default, rather than on whatever 0.5 means
 in the current encoding.
+
+**Saturation** comes *after* the cube warp, which is the whole point of where it
+sits. Pulled to zero it renders the luma of whatever the corners just did, so the
+six hue corners become a channel mixer for black and white — drop the cyan
+corner's green and a teal sky goes heavy and dramatic without touching skin. In
+front of the warp it could only ever be a fader on the original colours.
 
 **Tetrahedral interpolation**, after
 [hotgluebanjo's TetraInterp](https://github.com/hotgluebanjo/TetraInterp-DCTL).
@@ -227,9 +267,12 @@ first window you ever open sizes itself to the image.
 | Middle-mouse drag | Pan (where macOS lets it through) |
 | Space + drag | Pan |
 | ← → | Previous / next image in the folder |
-| ⌘0 / ⌘1 | Zoom to fit / 1 image pixel per screen pixel |
+| Home / End | Zoom to fit / 1 image pixel per screen pixel |
 | `E` / `⇧E` / `R` | Exposure up / down / reset |
 | `M` / `N` | Show / hide the inspector / colour panel |
+| 1–6 | RGB / R / G / B / A / Luma |
+| `C` / `F` | Clipping overlay / false colour |
+| ⌘\[ / ⌘\] | Rotate anticlockwise / clockwise |
 | ⇧⌘E | Export as displayed |
 | Right-drag on the image | Lighten / darken the backdrop |
 
@@ -254,8 +297,6 @@ with it.
 Scope plates track the backdrop but stay in the lower part of the range: they
 carry light traces, and a plate pale enough to match a bright surround would erase
 them.
-| 1–6 | RGB / R / G / B / A / Luma |
-| `C` / `F` | Clipping overlay / false colour |
 
 ## Becoming your default viewer
 
@@ -277,13 +318,20 @@ than the CLT.
 ./build.sh                              # → Lupp.app
 ./Lupp.app/Contents/MacOS/Lupp --selftest
 ./Lupp.app/Contents/MacOS/Lupp image.exr
+./Lupp.app/Contents/MacOS/Lupp --time-load ~/Pictures
 LUPP_DEBUG=1 ./Lupp.app/Contents/MacOS/Lupp   # logs scroll events
 ```
 
-`--selftest` checks the things a screenshot can't: that sRGB linearizes
-correctly, that EXR values above 1.0 survive decoding, that EXIF rotation is
-applied, that alpha is un-premultiplied, and that zoom holds the point under the
-cursor.
+`--selftest` runs 55 checks on the things a screenshot can't confirm: that sRGB
+linearizes correctly, that both storage paths produce identical values, that EXR
+values above 1.0 survive decoding, that all four EXIF rotations land the right way
+up, that alpha is un-premultiplied, that the grade defaults are a true no-op, that
+each camera log curve hits its published mid-grey anchor, and that an exported file
+round-trips to the same pixels.
+
+`--time-load <folder>` reports what each file costs to open, which storage it
+landed in, and what a second visit costs — useful when the pictures live on a
+network share and you want to know which half of the time is the network.
 
 ## Known limits
 
@@ -296,16 +344,20 @@ These are real and mostly deliberate.
 - **Not sandboxed**, on purpose. Under App Sandbox, opening a file grants that
   file and nothing else, which would leave arrow-key navigation reading an empty
   folder.
-- **Memory is the cost of the float pipeline.** RGBA float32 is 16 bytes per
-  pixel — a 24 MP photo is ~384 MB. Above 120 MP, Lupp decodes a reduced version
-  and says `reduced` in the readout rather than allocating ~2 GB.
+- **Memory is the cost of working in float.** A file that needs the float path is
+  16 bytes a pixel — a 24 MP frame is ~384 MB. Ordinary eight-bit photographs
+  take the byte path instead and cost 4 bytes a pixel, or ~96 MB. Above 120 MP,
+  Lupp decodes a reduced version and says `reduced` in the readout. The
+  decoded-image cache is bounded at a sixteenth of physical memory and emptied
+  when the last window closes.
 - **No DPX or Cineon**; ImageIO doesn't read them. PSD is composite only, never
   layers.
 - **RAW is Apple's rendering, not the camera's or Adobe's**, and there are no
   RAW development controls yet — no exposure, temperature or tint on the RAW
   itself, just the rendered result.
-- **LUTs assume display-encoded input.** A log LUT needs an input transform Lupp
-  doesn't have.
+- **Log LUT inputs are transfer curves only.** The primaries a camera LUT expects
+  are not recorded in any image file, so the curve will be right and the gamut may
+  not be. See [What the LUT is fed](#what-the-lut-is-fed).
 - **The eyedropper reports scene-linear values in extended sRGB**, converted by
   CoreGraphics from whatever the file declared. That is one of several defensible
   answers to "what colour is this pixel" — it is not the display-mapped value you

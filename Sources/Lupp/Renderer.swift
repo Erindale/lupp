@@ -52,6 +52,7 @@ final class Renderer {
         var tetraAmount: Float
         var blackPoint: Float
         var whitePoint: Float
+        var saturation: Float
         var showChecker: UInt32
         var viewTransform: UInt32
         var channel: UInt32
@@ -146,6 +147,11 @@ final class Renderer {
         var lutInput: LUTInput = .display
         var tetra = TetraCorners()
         var tetraAmount: Float = 1
+
+        /// How much colour survives, applied after the cube warp. 1 is
+        /// unchanged, 0 is monochrome, and above 1 pushes further out.
+        var saturation: Float = 1
+        var saturationOn = true
     }
 
     init?(pixelFormat: MTLPixelFormat) {
@@ -517,6 +523,7 @@ final class Renderer {
                  tetraAmount: display.tetraAmount,
                  blackPoint: light ? display.blackPoint : 0,
                  whitePoint: light ? display.whitePoint : 1,
+                 saturation: (master && display.saturationOn) ? display.saturation : 1,
                  showChecker: showChecker,
                  viewTransform: UInt32(display.viewTransform.rawValue),
                  channel: UInt32(display.channel.rawValue),
@@ -586,6 +593,7 @@ final class Renderer {
         float  tetraAmount;
         float  blackPoint;
         float  whitePoint;
+        float  saturation;
         uint   showChecker;
         uint   viewTransform;
         uint   channel;
@@ -842,6 +850,17 @@ final class Renderer {
 
         if (u.tetraEnabled != 0u && u.tetraAmount > 0.0) {
             enc = clamp(mix(enc, tetraInterp(enc, tetra), u.tetraAmount), 0.0, 1.0);
+        }
+
+        // Saturation last, and deliberately after the cube warp rather than
+        // before it. Pulled to zero it renders the luma of whatever the corners
+        // just did, so the six hue corners become a channel mixer for black and
+        // white — move the blues down and a sky goes heavy without touching the
+        // skin. Before the warp it would only ever be a fader on the original
+        // colours, which is a much duller instrument.
+        if (u.saturation != 1.0) {
+            float grey = dot(enc, float3(0.2126, 0.7152, 0.0722));
+            enc = clamp(mix(float3(grey), enc, u.saturation), 0.0, 1.0);
         }
         rgb = srgbToLinear(enc);
 

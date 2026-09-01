@@ -8,7 +8,7 @@ import simd
 /// wanting to grade is not the same as wanting to watch scopes while you do it.
 final class GradePanel: SidePanel {
     /// Which part of the chain a bypass switch belongs to.
-    enum Section { case master, light, whiteBalance, tetra, lut, crop }
+    enum Section { case master, light, whiteBalance, tetra, saturation, lut, crop }
 
     var onLoadLUT: (() -> Void)?
     var onClearLUT: (() -> Void)?
@@ -16,6 +16,7 @@ final class GradePanel: SidePanel {
     var onPickLUT: ((String?) -> Void)?
     var onRemoveLUT: ((String) -> Void)?
     var onTetra: ((Renderer.TetraCorners, Float, Bool) -> Void)?
+    var onSaturation: ((Float) -> Void)?
     /// exposure EV, white balance gains, contrast, pivot, black point, white point
     var onLight: ((Float, SIMD3<Float>, Float, Float, Float, Float) -> Void)?
     var onSavePreset: (() -> Void)?
@@ -50,6 +51,9 @@ final class GradePanel: SidePanel {
     ]
     private var tetraRows: [TetraSliderRow] = []
     private let tetraAmount = FineSlider()
+    /// 0 is monochrome, 1 unchanged, 2 twice as far out — so the handle sits in
+    /// the middle at neutral like every other row here.
+    private lazy var saturationRow = LabelledSliderRow(label: "Saturation", initial: 1, span: 1)
     private let savePresetButton = NSButton(title: "Save Preset…", target: nil, action: nil)
 
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -79,6 +83,7 @@ final class GradePanel: SidePanel {
     private var lightHeader: SectionHeader!
     private var wbHeader: SectionHeader!
     private var tetraHeader: SectionHeader!
+    private var saturationHeader: SectionHeader!
     private var lutHeader: SectionHeader!
 
     override init() {
@@ -147,6 +152,16 @@ final class GradePanel: SidePanel {
                                  toggle: { [weak self] on in
                                      self?.emit { self?.onBypass?(.whiteBalance, on) } },
                                  reset: { [weak self] in self?.resetWhiteBalance() })
+        saturationRow.onChange = { [weak self] in
+            guard let self else { return }
+            self.emit { self.onSaturation?(self.saturationRow.value) }
+        }
+        saturationHeader = sectionHeader("Saturation",
+                                         toggle: { [weak self] on in
+                                             self?.emit { self?.onBypass?(.saturation, on) } },
+                                         reset: { [weak self] in
+                                             self?.saturationRow.resetToDefault()
+                                             self?.emit { self?.onSaturation?(1) } })
         tetraHeader = sectionHeader("Tetrahedral",
                                     toggle: { [weak self] on in
                                         self?.emit { self?.onBypass?(.tetra, on) } },
@@ -189,9 +204,13 @@ final class GradePanel: SidePanel {
         ]
         column += tetraRowViews
         column += [caption("Mix"), tetraAmount, tetraNote]
+        column += [separator(), saturationHeader, saturationRow,
+                   caption("How much colour survives, taken after the cube warp — so pulling it to zero renders the luma of whatever the corners just did, and the six hue corners become a channel mixer for black and white.")]
 
-        // Order down the panel is the order the pixels travel: light, then the
-        // cube warp, then the LUT on top, then what to do with the result.
+        // Light, the cube warp and saturation are listed in the order they are
+        // applied. The LUT is the exception: it sits down here with the presets
+        // and export, but the shader applies it *before* the cube warp — so this
+        // layout does not describe its position in the chain.
         column += [separator(),
                    cropHeader, cropAspect, cropApply, cropSize, cropNote,
                    separator(),
@@ -204,15 +223,16 @@ final class GradePanel: SidePanel {
         sectionViews[.light] = [blackRow, whiteRow, exposureRow, contrastRow, pivotRow]
         sectionViews[.whiteBalance] = wbRows
         sectionViews[.tetra] = tetraRowViews + ([tetraAmount] as [NSView])
+        sectionViews[.saturation] = [saturationRow]
         sectionViews[.lut] = [lutPopup, lutButtons, lutLabel, lutInput, lutSlider]
         sectionViews[.crop] = [cropAspect, cropApply, cropSize]
 
         // Built in named pieces: one literal mixing this many control types is
         // more than the type checker will do in reasonable time.
         var wide: [NSView] = [lutPopup, lutButtons, lutLabel, lutInput, lutSlider, lutNote]
-        wide += [tetraAmount, tetraNote, lightNote, savePresetButton] as [NSView]
+        wide += [tetraAmount, tetraNote, lightNote, savePresetButton, saturationRow] as [NSView]
         wide += [presetPopup, presetButtons, exportButton, exportNote] as [NSView]
-        wide += [masterHeader, lightHeader, wbHeader, tetraHeader, lutHeader] as [NSView]
+        wide += [masterHeader, lightHeader, wbHeader, tetraHeader, saturationHeader, lutHeader] as [NSView]
         wide += [cropHeader, cropAspect, cropApply, cropSize, cropNote] as [NSView]
         wide += tetraRowViews
         wide += lightRows as [NSView]
@@ -266,6 +286,7 @@ final class GradePanel: SidePanel {
 
     private func resetEverything() {
         for row in lightAndBalanceRows { row.resetToDefault() }
+        saturationRow.resetToDefault()
         for row in tetraRows { row.resetToDefault() }
         tetraAmount.doubleValue = 100
         lightChanged()
@@ -392,13 +413,15 @@ final class GradePanel: SidePanel {
             let live = (on[section] ?? true) && (section == .crop || master)
             for v in views { v.alphaValue = live ? 1 : 0.4 }
         }
-        for header in [lightHeader, wbHeader, tetraHeader, lutHeader] {
+        for header in [lightHeader, wbHeader, tetraHeader, saturationHeader, lutHeader] {
             header?.alphaValue = master ? 1 : 0.55
         }
         if !handlingControlAction { cropApply.selectedSegment = display.cropApplied ? 1 : 0 }
         lightHeader.isOn = display.lightOn
         wbHeader.isOn = display.whiteBalanceOn
         tetraHeader.isOn = display.tetraOn
+        saturationHeader.isOn = display.saturationOn
+        if !handlingControlAction { saturationRow.value = display.saturation }
         lutHeader.isOn = display.lutOn
 
         if let name = display.lutName {
