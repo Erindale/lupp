@@ -55,6 +55,10 @@ image — comes from a single adjustable number.*
 - **Scopes measure the graded image, live.** They're computed from a small render
   through the same shader as the canvas, so they always agree with the picture and
   update as you drag a slider.
+- **Everything the file says about itself** at the bottom of the inspector —
+  camera, lens, shutter, aperture, ISO, focal length and date read properly, then
+  every raw EXIF, TIFF and GPS field underneath. Read once at load, on the thread
+  that already went to the disk.
 - **Inspector** (`M`) — histogram, waveform (RGB parade, combined, or luma),
   vectorscope with a BT.709 graticule and skin-tone line, and a CIE 1931 xy plot
   with the spectral locus and Rec.709 / P3 / Rec.2020 gamut triangles. Plus
