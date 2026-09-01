@@ -36,6 +36,7 @@ enum Selftest {
         gpuPathIsExact(in: dir)
         pickerReportsUnclamped(in: dir)
         editsRoundTripPerImage(in: dir)
+        gradeBakesToACube()
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -1008,6 +1009,83 @@ enum Selftest {
         var c = Preset.from(touched, lutPath: nil); c.name = ""
         check("an exposure change does count as an edit", c != b,
               detail: "a real edit was not noticed")
+    }
+
+    /// A grade written out as a cube has to be the same grade.
+    ///
+    /// The whole value of baking through the real shader is that the file cannot
+    /// be a second opinion about your look — so the things to prove are that
+    /// doing nothing produces a cube that does nothing, and that a grade with an
+    /// unmistakable signature comes back out with that signature intact.
+    private static func gradeBakesToACube() {
+        guard let renderer = Renderer(pixelFormat: .rgba16Float) else {
+            return fail("LUT bake", "no Metal device")
+        }
+        let n = 17
+        func entry(_ cube: [SIMD3<Float>], r: Int, g: Int, b: Int) -> SIMD3<Float> {
+            cube[(b * n + g) * n + r]
+        }
+
+        var neutral = Renderer.DisplayState()
+        neutral.viewTransform = .standard
+        guard let identity = renderer.bakeLUT(size: n, display: neutral) else {
+            return fail("LUT bake", "baking a neutral grade failed")
+        }
+        check("a baked cube has the right number of entries", identity.count == n * n * n,
+              detail: "got \(identity.count), want \(n * n * n)")
+
+        // Every entry should be its own coordinate: in equals out.
+        var worst: Float = 0
+        for b in 0..<n {
+            for g in 0..<n {
+                for r in 0..<n {
+                    let want = SIMD3(Float(r), Float(g), Float(b)) / Float(n - 1)
+                    let got = entry(identity, r: r, g: g, b: b)
+                    worst = max(worst, simd_reduce_max(abs(got - want)))
+                }
+            }
+        }
+        check("a neutral grade bakes to an identity cube", worst < 0.01,
+              detail: String(format: "worst entry was off by %.4f", worst))
+
+        // Saturation to zero: every entry must land on the grey axis, which no
+        // accidental identity or transposition could satisfy.
+        var mono = neutral
+        mono.saturation = 0
+        guard let grey = renderer.bakeLUT(size: n, display: mono) else {
+            return fail("LUT bake", "baking a desaturated grade failed")
+        }
+        let allGrey = grey.allSatisfy {
+            abs($0.x - $0.y) < 0.01 && abs($0.y - $0.z) < 0.01
+        }
+        check("a grade bakes in — saturation 0 gives a cube of greys", allGrey,
+              detail: "an entry came back coloured")
+        // A pure exposure change must keep neutrals neutral. Brightness is the
+        // most likely thing anyone bakes, and a channel-ordering slip in the
+        // lattice would show up here as a colour cast on the grey axis and
+        // nowhere else — an identity cube would still look perfect.
+        var brighter = neutral
+        brighter.exposureEV = 2
+        if let lifted = renderer.bakeLUT(size: n, display: brighter) {
+            let neutralsStayNeutral = (0..<n).allSatisfy { i in
+                let e = entry(lifted, r: i, g: i, b: i)
+                return abs(e.x - e.y) < 0.01 && abs(e.y - e.z) < 0.01
+            }
+            check("an exposure change bakes without tinting the grey axis",
+                  neutralsStayNeutral,
+                  detail: "a grey input came back coloured")
+            // +2 EV is four times the light: sRGB 0.5 is linear 0.214, which
+            // lands at 0.858 linear and encodes to about 0.936.
+            let mid = entry(lifted, r: (n - 1) / 2, g: (n - 1) / 2, b: (n - 1) / 2)
+            check("and by the right amount", abs(mid.x - 0.936) < 0.02,
+                  detail: String(format: "mid grey baked to %.3f, want 0.936", mid.x))
+        }
+
+        // And it is not simply a black cube.
+        let bright = entry(grey, r: n - 1, g: n - 1, b: n - 1)
+        check("and the baked cube still spans black to white",
+              bright.x > 0.9 && entry(grey, r: 0, g: 0, b: 0).x < 0.1,
+              detail: String(format: "white corner %.3f", bright.x))
     }
 
     private static func firstStack(in view: NSView) -> NSStackView? {

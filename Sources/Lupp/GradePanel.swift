@@ -25,6 +25,7 @@ final class GradePanel: SidePanel {
     var onApplyLast: (() -> Void)?
     var onExport: (() -> Void)?
     var onBulkExport: (() -> Void)?
+    var onExportLUT: (() -> Void)?
     var onBypass: ((Section, Bool) -> Void)?
     /// Aspect ratio as width/height, or nil for free.
     var onCropAspect: ((Double?) -> Void)?
@@ -68,6 +69,7 @@ final class GradePanel: SidePanel {
     private let exportButton = NSButton(title: "Export As…",
                                         target: nil, action: nil)
     private let bulkButton = NSButton(title: "Export All Edited…", target: nil, action: nil)
+    private let bakeButton = NSButton(title: "Export Grade as LUT…", target: nil, action: nil)
 
     private var masterHeader: SectionHeader!
     private var cropHeader: SectionHeader!
@@ -159,6 +161,14 @@ final class GradePanel: SidePanel {
         bulkButton.translatesAutoresizingMaskIntoConstraints = false
         bulkButton.toolTip = "Write out every image you have edited in this window, each in its own current state."
 
+        bakeButton.bezelStyle = .rounded
+        bakeButton.controlSize = .regular
+        bakeButton.font = .systemFont(ofSize: 11)
+        bakeButton.target = self
+        bakeButton.action = #selector(exportLUTPressed(_:))
+        bakeButton.translatesAutoresizingMaskIntoConstraints = false
+        bakeButton.toolTip = "Write the whole colour chain out as a .cube, to carry this look into other software."
+
         let cropInfo = ("Drag the rectangle on the image; hold Shift for a tenth-speed drag with a magnifier. Applied makes the crop the working image — zoom, scopes and readout all follow it — without touching the source, so switching back to Overlay costs nothing. Export writes the crop at its own pixel size either way.")
         let tetraInfo = ("Moves the six hue corners of the RGB cube. Black, white and the greys between them are fixed, so neutrals stay neutral.")
         let lutInfo = ("A display LUT is the last thing applied — the look laid over a finished grade, so it will put colour back into anything saturation took out. Choosing a log input instead means the LUT is the display rendering: it gets log-encoded scene values and its output is taken as final, so it stands in for the view transform rather than tone-mapping twice, and necessarily happens earlier in the chain.")
@@ -242,7 +252,7 @@ final class GradePanel: SidePanel {
                    separator(),
                    cropHeader, cropAspect, cropApply, cropSize,
                    separator(),
-                   sectionLabel("Export", info: exportInfo), exportButton, bulkButton]
+                   sectionLabel("Export", info: exportInfo), exportButton, bulkButton, bakeButton]
 
         sectionViews[.light] = [blackRow, whiteRow, exposureRow, contrastRow, pivotRow]
         sectionViews[.whiteBalance] = wbRows
@@ -255,7 +265,7 @@ final class GradePanel: SidePanel {
         // more than the type checker will do in reasonable time.
         var wide: [NSView] = [lutPopup, lutButtons, lutLabel, lutInput, lutSlider]
         wide += [tetraAmount, savePresetButton, saturationRow] as [NSView]
-        wide += [presetPopup, presetButtons, exportButton, bulkButton] as [NSView]
+        wide += [presetPopup, presetButtons, exportButton, bulkButton, bakeButton] as [NSView]
         wide += [masterHeader, lightHeader, wbHeader, tetraHeader, saturationHeader, lutHeader] as [NSView]
         wide += [cropHeader, cropAspect, cropApply, cropSize] as [NSView]
         wide += tetraRowViews
@@ -426,6 +436,10 @@ final class GradePanel: SidePanel {
 
     @objc private func bulkExportPressed(_ sender: Any?) {
         emit { onBulkExport?() }
+    }
+
+    @objc private func exportLUTPressed(_ sender: Any?) {
+        emit { onExportLUT?() }
     }
 
     /// The count is on the button, so you know whether there is anything to do

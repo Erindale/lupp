@@ -202,6 +202,16 @@ implementation that can drift. **PNG**, **JPEG** (quality 0.95) and **TIFF** —
 8-bit for PNG and JPEG, 16-bit for TIFF, where the extra depth is the reason to
 pick it.
 
+**Export Grade as LUT…** bakes the whole colour chain into a `.cube` — view
+transform, light, cube warp, saturation and any LUT already loaded — at 17³, 33³
+or 65³, written to a folder, added to Lupp's own library, or both. It is rendered
+through the same shader as the canvas rather than the chain being reimplemented,
+because a LUT written by a second implementation would be a second opinion about
+your grade. Input and output are display-encoded sRGB; the crop isn't included,
+since a cube maps colours and has no geometry, and a scene-linear source carries
+values above white that a 0–1 cube has nowhere to put. The dialog says which of
+those apply before you write anything.
+
 **Export All Edited…** writes out every image you have graded in this window in
 one pass, each in its own state, as `name_suffix.ext` — the suffix, the format
 and the destination are yours to choose, and the dialog shows you a real

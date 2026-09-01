@@ -285,6 +285,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let exportItem = fileMenu.addItem(withTitle: "Export As…",
                                           action: #selector(ViewerWindowController.exportImage(_:)),
                                           keyEquivalent: "e")
+        fileMenu.addItem(withTitle: "Export Grade as LUT…",
+                         action: #selector(ViewerWindowController.exportGradeAsLUTMenu(_:)),
+                         keyEquivalent: "")
         exportItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")

@@ -117,6 +117,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private var edits: [URL: Session] = [:]
     /// Held while a batch runs, so the sheet is not released mid-export.
     private var bulkSheet: BulkExportSheet?
+    private var lutSheet: LUTBakeSheet?
 
     private var scopesOpen: Bool {
         get { Preferences.scopesPanelOpen }
@@ -342,6 +343,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         }
         grade.onExport = { [weak self] in self?.exportImage(nil) }
         grade.onBulkExport = { [weak self] in self?.bulkExport() }
+        grade.onExportLUT = { [weak self] in self?.exportGradeAsLUT() }
         grade.onEditBegan = { [weak self] in self?.beginEdit() }
         grade.onEditEnded = { [weak self] in self?.endEdit() }
         grade.onLoadLUT = { [weak self] in self?.loadLUT() }
@@ -688,6 +690,83 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
+
+    // MARK: - Grade as a LUT
+
+    /// The menu's way in. Same action as the panel button, so the two cannot
+    /// come to mean different things.
+    @objc func exportGradeAsLUTMenu(_ sender: Any?) { exportGradeAsLUT() }
+
+    private func exportGradeAsLUT() {
+        guard let window else { return }
+        guard hasEdits(canvas.display, lutPath: currentLUTPath) else {
+            let a = NSAlert()
+            a.messageText = "There’s no grade to write out"
+            a.informativeText = "Adjust something first — an identity LUT is a large file that does nothing."
+            a.runModal()
+            return
+        }
+        let stem = canvas.image?.url.deletingPathExtension().lastPathComponent ?? "Lupp Grade"
+        let sheet = LUTBakeSheet(
+            suggestedName: currentPresetName ?? stem,
+            caveats: LUTBake.caveats(for: canvas.display, sceneLinear: currentIsSceneLinear))
+        lutSheet = sheet
+        sheet.present(over: window) { [weak self] options in
+            self?.lutSheet = nil
+            self?.writeLUT(options)
+        }
+    }
+
+    private func writeLUT(_ options: LUTBake.Options) {
+        guard let text = LUTBake.cube(display: canvas.display,
+                                      lutPath: currentLUTPath, options: options) else {
+            let a = NSAlert()
+            a.messageText = "Couldn’t build the LUT"
+            a.informativeText = "Rendering the lattice failed."
+            a.runModal()
+            return
+        }
+        let file = options.name
+            .replacingOccurrences(of: "/", with: "-") + ".cube"
+        var written: [URL] = []
+        var failed: String?
+
+        if let folder = options.destination {
+            let out = folder.appendingPathComponent(file)
+            do { try text.write(to: out, atomically: true, encoding: .utf8); written.append(out) }
+            catch { failed = error.localizedDescription }
+        }
+        if options.addToLibrary {
+            // Via a temporary file and the library's own importer, so a baked LUT
+            // arrives by exactly the same door as one you added from disk.
+            let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(file)
+            if (try? text.write(to: tmp, atomically: true, encoding: .utf8)) != nil {
+                written.append(URL(fileURLWithPath: LUTLibrary.add(importing: tmp)))
+                try? FileManager.default.removeItem(at: tmp)
+                refreshLibrary()
+            }
+        }
+
+        let a = NSAlert()
+        if let failed {
+            a.messageText = "Couldn’t write the LUT"
+            a.informativeText = failed
+        } else {
+            a.messageText = "Wrote \(options.name).cube"
+            a.informativeText = written.map { $0.deletingLastPathComponent().path }
+                .joined(separator: "\n")
+        }
+        if let first = written.first, failed == nil {
+            a.addButton(withTitle: "OK")
+            a.addButton(withTitle: "Show in Finder")
+            if a.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.activateFileViewerSelecting([first])
+            }
+            return
+        }
+        a.runModal()
+    }
 
     // MARK: - Bulk export
 

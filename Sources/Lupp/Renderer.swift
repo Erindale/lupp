@@ -494,6 +494,67 @@ final class Renderer {
                             Float(Float16(bitPattern: half[3])))
     }
 
+    /// Bake the current grade into a cube of RGB values.
+    ///
+    /// The lattice is rendered through the same fragment shader as the canvas
+    /// rather than the chain being reimplemented in Swift — which is the whole
+    /// point. A LUT written by a second implementation would be a second opinion
+    /// about your grade, and the one thing a LUT must be is the same answer.
+    ///
+    /// The cube's input is display-encoded, so the lattice holds the *linear*
+    /// values those encodings stand for; the sampler and the shader then do
+    /// exactly what they do to a picture. For a display-referred image that is
+    /// exact. A scene-linear source carries values above 1.0 that a 0–1 cube has
+    /// nowhere to put, which is a property of the format, not of this code.
+    ///
+    /// Call on a renderer of its own: it uploads its own texture and would
+    /// otherwise evict the picture on screen.
+    func bakeLUT(size n: Int, display: DisplayState) -> [SIMD3<Float>]? {
+        guard n >= 2, n <= 128 else { return nil }
+        let w = n * n, h = n
+        let px = UnsafeMutablePointer<Float>.allocate(capacity: w * h * 4)
+        for b in 0..<n {
+            for g in 0..<n {
+                for r in 0..<n {
+                    let i = ((b * n + g) * n + r) * 4
+                    px[i]     = srgbToLinear(Float(r) / Float(n - 1))
+                    px[i + 1] = srgbToLinear(Float(g) / Float(n - 1))
+                    px[i + 2] = srgbToLinear(Float(b) / Float(n - 1))
+                    px[i + 3] = 1
+                }
+            }
+        }
+        let lattice = FloatImage(width: w, height: h, storage: .linearFloat(px),
+                                 url: URL(fileURLWithPath: "/lattice"),
+                                 typeIdentifier: "public.data", sourceBitDepth: 32,
+                                 sourceColorSpace: "extendedLinearSRGB",
+                                 fullWidth: w, fullHeight: h, wasDownsampled: false,
+                                 maxComponent: 1)
+        upload(lattice)
+
+        // Only the colour chain. A crop is spatial and a cube has no geometry;
+        // the inspection overlays describe the picture rather than change it.
+        var d = display
+        d.cropEnabled = false
+        d.cropApplied = false
+        d.channel = .rgb
+        d.showClipping = false
+        d.falseColour = false
+
+        guard let half = offscreen(width: w, height: h, uv: SIMD4(0, 0, 1, 1),
+                                   display: d, filter: nearest, encodeOutput: 1) else {
+            return nil
+        }
+        var out: [SIMD3<Float>] = []
+        out.reserveCapacity(n * n * n)
+        for i in 0..<(n * n * n) {
+            out.append(SIMD3(Float(Float16(bitPattern: half[i * 4])),
+                             Float(Float16(bitPattern: half[i * 4 + 1])),
+                             Float(Float16(bitPattern: half[i * 4 + 2]))))
+        }
+        return out
+    }
+
     /// Render the graded image small, for the scopes to measure.
     ///
     /// Scopes have to describe what is on screen, not the file — a histogram that
