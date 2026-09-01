@@ -59,8 +59,11 @@ class LabelledSliderRow: NSView {
         field.isBordered = true
         field.bezelStyle = .roundedBezel
         field.controlSize = .small
-        field.target = self
-        field.action = #selector(fieldEdited)
+        // No target/action: a text field sends its action whenever editing ends,
+        // which would commit a half-typed number just because you clicked away.
+        // Return is the only thing that should commit, so Return is handled
+        // explicitly and everything else discards.
+        field.delegate = self
 
         for v in [name, slider, field] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -86,21 +89,67 @@ class LabelledSliderRow: NSView {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     @objc private func sliderMoved() {
-        field.stringValue = String(format: "%.\(decimals)f", slider.doubleValue)
+        displayCurrentValue()
         onChange?()
     }
 
-    /// Typed values aren't clamped to the slider's range — the slider is a
-    /// convenience, not the limit of what the transform accepts.
-    @objc private func fieldEdited() {
-        guard let v = Double(field.stringValue) else {
-            field.stringValue = String(format: "%.\(decimals)f", slider.doubleValue)
-            return
-        }
+    private func displayCurrentValue() {
+        field.stringValue = String(format: "%.\(decimals)f", slider.doubleValue)
+    }
+
+    /// Take what was typed, if it is a number at all.
+    ///
+    /// Anything else is left alone rather than argued with — no alert, no beep.
+    /// The end-editing pass puts the real value back, so a typo simply undoes
+    /// itself, which is what you want from a field you are nudging by eye.
+    private func commitTypedValue() {
+        guard let v = Double(field.stringValue) else { return }
         slider.doubleValue = min(max(v, slider.minValue), slider.maxValue)
-        field.stringValue = String(format: "%.\(decimals)f", v)
         onChange?()
     }
+
+    /// Hand the keyboard back to the picture, so the bare-key shortcuts work
+    /// again the moment you have finished typing.
+    private func releaseKeyboard() {
+        guard let window else { return }
+        window.makeFirstResponder(window.initialFirstResponder)
+    }
+}
+
+extension LabelledSliderRow: NSTextFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView,
+                 doCommandBy commandSelector: Selector) -> Bool {
+        switch commandSelector {
+        case #selector(NSResponder.insertNewline(_:)):
+            commitTypedValue()
+            releaseKeyboard()
+            return true
+        // Escape reaches a field editor as `cancelOperation:` on some paths and
+        // as `complete:` on others, since the text system treats it as "abandon
+        // the completion you were offered" first. Neither means anything else
+        // in a box that only holds a number, so both simply back out.
+        case #selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.complete(_:)):
+            displayCurrentValue()   // put the real value back before anyone sees it
+            releaseKeyboard()
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// However the edit ended, the field goes back to showing the value that is
+    /// actually in effect. Return has already committed by the time this runs,
+    /// so this is what discards anything typed and not committed — including
+    /// text that was never a number.
+    func controlTextDidEndEditing(_ obj: Notification) {
+        displayCurrentValue()
+    }
+
+    /// Nothing here formats on the way in, but if that ever changes, a value
+    /// the formatter cannot read must not be allowed to refuse to give up the
+    /// keyboard. Accepting it here means the revert above still gets to run.
+    func control(_ control: NSControl, didFailToFormatString string: String,
+                 errorDescription error: String?) -> Bool { true }
 }
 
 /// A tetra corner's slider, carrying which parameter it drives.

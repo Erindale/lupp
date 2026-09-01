@@ -2,6 +2,37 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
+/// A window that lets go of a text field when you click somewhere else.
+///
+/// AppKit only moves the keyboard when the thing you clicked asks for it, so
+/// clicking a panel's background, a label, or the picture itself left a
+/// half-typed number still holding first responder — and with it every bare-key
+/// shortcut, with nothing on screen to say why. Handling it at the window means
+/// one rule for every click, rather than each view remembering to be polite.
+final class ViewerWindow: NSWindow {
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown,
+           let editor = firstResponder as? NSText,
+           let content = contentView {
+            // The field editor belongs to the control being edited; clicks
+            // inside that control are part of editing, not a departure from it.
+            let owner = (editor.delegate as? NSView) ?? editor
+            let hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
+            let staying = hit.map { $0 === owner || $0.isDescendant(of: owner) } ?? false
+            if !staying {
+                makeFirstResponder(nil)
+                // A panel's background doesn't want the keyboard, so hand it to
+                // the canvas rather than leaving it with the window and the
+                // bare-key shortcuts half alive.
+                if hit?.acceptsFirstResponder != true, let fallback = initialFirstResponder {
+                    makeFirstResponder(fallback)
+                }
+            }
+        }
+        super.sendEvent(event)
+    }
+}
+
 /// One window, one image, plus its folder for arrow-key navigation.
 final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSWindowDelegate {
     private let canvas = ImageCanvasView()
@@ -81,7 +112,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     private convenience init(url: URL, deferOpening: Bool) {
-        let window = NSWindow(
+        let window = ViewerWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
@@ -101,6 +132,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         buildContentView()
         buildTitlebarAccessory()
         canvas.canvasDelegate = self
+        // Where the keyboard goes when nothing else has claimed it — after a
+        // field is finished with, and at the start.
+        window.initialFirstResponder = canvas
         wireScopesPanel()
 
         // Restores the last size and position. Only the very first window ever
