@@ -74,6 +74,19 @@ if let i = CommandLine.arguments.firstIndex(of: "--time-load"),
     exit(0)
 }
 
+// Diagnostic: `Lupp --stress <folder> [count]` reports what a long editing
+// session costs, since the edit cache and the undo histories are the two things
+// that now grow for as long as a window stays open.
+if let i = CommandLine.arguments.firstIndex(of: "--stress"),
+   i + 1 < CommandLine.arguments.count {
+    let folder = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    let count = i + 2 < CommandLine.arguments.count
+        ? (Int(CommandLine.arguments[i + 2]) ?? 100) : 100
+    let depth = i + 3 < CommandLine.arguments.count
+        ? (Int(CommandLine.arguments[i + 3]) ?? 200) : 200
+    exit(Stress.run(folder: folder, count: count, undoDepth: depth))
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

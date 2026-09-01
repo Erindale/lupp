@@ -160,7 +160,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// them in place.
     func rebuildSnapshot() -> (session: Session, image: URL)? {
         guard let img = canvas.image else { return nil }
-        return (Session.from(canvas.display, image: img.url, lutPath: currentLUTPath), img.url)
+        return (Session.from(canvas.display, image: img.url,
+                             lutPath: currentLUTPath, bookmark: false), img.url)
     }
 
     /// A window built to receive work that already exists in memory, rather than
@@ -695,8 +696,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private func rememberEditsOnCurrentImage() {
         guard let img = canvas.image else { return }
         if hasEdits(canvas.display, lutPath: currentLUTPath) {
+            // No bookmark: this copy never leaves memory, and making one costs a
+            // filesystem round trip on every navigation.
             edits[img.url] = Session.from(canvas.display, image: img.url,
-                                          lutPath: currentLUTPath)
+                                          lutPath: currentLUTPath, bookmark: false)
         } else {
             // Undone back to neutral: forget it, so the picture is genuinely
             // untouched again rather than carrying an empty record of having
