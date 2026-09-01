@@ -283,6 +283,14 @@ final class GradePanel: SidePanel {
         emit { onTetra?(corners, amount, !corners.isIdentity) }
     }
 
+    /// Resetting the whole grade covers light, white balance, the cube and
+    /// saturation — every section that has to be put back must also *emit*, or
+    /// the slider returns to its default while the renderer keeps the old value
+    /// and the panel starts lying about the picture.
+    ///
+    /// The LUT and the crop are deliberately left alone: both are choices you
+    /// made rather than values you dialled, and silently discarding a crop is
+    /// not what a reset arrow should be able to do. Each has its own reset.
     private func resetEverything() {
         for row in lightAndBalanceRows { row.resetToDefault() }
         saturationRow.resetToDefault()
@@ -290,6 +298,7 @@ final class GradePanel: SidePanel {
         tetraAmount.doubleValue = 100
         lightChanged()
         tetraChanged(nil)
+        emit { onSaturation?(1) }
     }
 
     @objc private func cropApplyChanged(_ sender: NSSegmentedControl) {
