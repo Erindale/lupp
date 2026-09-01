@@ -35,6 +35,7 @@ enum Selftest {
         sessionRoundTrips(in: dir)
         gpuPathIsExact(in: dir)
         pickerReportsUnclamped(in: dir)
+        editsRoundTripPerImage(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -962,6 +963,51 @@ enum Selftest {
             check("the picker follows the grade", near(dark.x, 1.0, tol: 0.03),
                   detail: String(format: "4.0 at -2EV gave %.3f, want 1.0", dark.x))
         }
+    }
+
+    /// Each image keeps its own work while you scroll a folder.
+    ///
+    /// The cache stores a Session per image, so what matters is that a Session
+    /// carries everything an edit consists of — including the crop, which undo
+    /// deliberately excludes and this deliberately does not — and that a picture
+    /// nobody touched is distinguishable from one that was edited back to
+    /// neutral. Get the second wrong and every image in a folder files itself as
+    /// edited the moment it opens.
+    private static func editsRoundTripPerImage(in dir: URL) {
+        var edited = Renderer.DisplayState()
+        edited.exposureEV = 1.5
+        edited.saturation = 0.25
+        edited.cropEnabled = true
+        edited.crop = SIMD4<Float>(0.1, 0.2, 0.5, 0.5)
+
+        let url = dir.appendingPathComponent("frame.png")
+        let session = Session.from(edited, image: url, lutPath: nil)
+        var restored = Renderer.DisplayState()
+        session.apply(to: &restored)
+        check("an image's own edits come back whole",
+              restored.exposureEV == 1.5 && restored.saturation == 0.25
+                  && restored.cropEnabled && restored.crop.z == 0.5,
+              detail: String(format: "EV %.2f, sat %.2f, crop %@",
+                             restored.exposureEV, restored.saturation,
+                             restored.cropEnabled ? "on" : "off"))
+
+        // A file's view transform is chosen from what kind of file it is, so an
+        // EXR opening as AgX has not been edited by anyone.
+        var untouchedEXR = Renderer.DisplayState()
+        untouchedEXR.viewTransform = .agx
+        var neutral = Renderer.DisplayState()
+        neutral.viewTransform = untouchedEXR.viewTransform
+        var a = Preset.from(untouchedEXR, lutPath: nil); a.name = ""
+        var b = Preset.from(neutral, lutPath: nil); b.name = ""
+        check("an untouched scene-linear file does not count as edited", a == b,
+              detail: "its detected view transform was mistaken for an edit")
+
+        // And something actually done to it does count.
+        var touched = untouchedEXR
+        touched.exposureEV = 0.5
+        var c = Preset.from(touched, lutPath: nil); c.name = ""
+        check("an exposure change does count as an edit", c != b,
+              detail: "a real edit was not noticed")
     }
 
     private static func firstStack(in view: NSView) -> NSStackView? {

@@ -97,6 +97,24 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// Held between asking for an image and it arriving, since the grade can only
     /// be applied once there is something to apply it to.
     private var pendingSession: Session?
+    /// Whether that pending work came from this window's own cache rather than
+    /// from a `.lupp` file. A saved session records how you were looking at the
+    /// image as well as what you did to it; work you are simply scrolling back
+    /// past should not reach up and change which channel you are inspecting.
+    private var pendingIsCachedEdit = false
+
+    /// Every image in this window that you have actually edited, and what you did
+    /// to it.
+    ///
+    /// Each picture keeps its own work, so scrolling a folder shows your grades
+    /// rather than one grade imposed on everything — and two frames you graded
+    /// differently can be compared by arrowing between them, which a single
+    /// carried-forward grade could never do. Copying a look onto the next image
+    /// stays a deliberate act: Apply Last, or a preset.
+    ///
+    /// In memory and for this window only. Nothing here is written to disk;
+    /// sessions are still saved when you ask and not before.
+    private var edits: [URL: Session] = [:]
 
     private var scopesOpen: Bool {
         get { Preferences.scopesPanelOpen }
@@ -631,6 +649,39 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
 
+    // MARK: - Per-image edits
+
+    /// Whether anything has actually been done to the picture on screen.
+    ///
+    /// Compared against a neutral state built with *this* image's view transform
+    /// and LUT input, because neither is an edit: the transform is chosen from
+    /// what kind of file it is, and the input is a standing preference about how
+    /// LUTs are read. Measuring against a bare default would file every EXR as
+    /// edited the moment it opened.
+    private func hasEdits(_ d: Renderer.DisplayState, lutPath: String?) -> Bool {
+        var neutral = Renderer.DisplayState()
+        neutral.viewTransform = d.viewTransform
+        neutral.lutInput = d.lutInput
+        var mine = Preset.from(d, lutPath: lutPath); mine.name = ""
+        var none = Preset.from(neutral, lutPath: nil); none.name = ""
+        // Crop is not part of a preset, so it is asked about separately.
+        return mine != none || d.cropEnabled
+    }
+
+    /// Called on the way out of an image, while it is still the one on screen.
+    private func rememberEditsOnCurrentImage() {
+        guard let img = canvas.image else { return }
+        if hasEdits(canvas.display, lutPath: currentLUTPath) {
+            edits[img.url] = Session.from(canvas.display, image: img.url,
+                                          lutPath: currentLUTPath)
+        } else {
+            // Undone back to neutral: forget it, so the picture is genuinely
+            // untouched again rather than carrying an empty record of having
+            // once been edited.
+            edits.removeValue(forKey: img.url)
+        }
+    }
+
     // MARK: - Undo
 
     /// The grade as it was before the edit in progress.
@@ -706,8 +757,16 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private func loadCurrent() {
         guard siblings.indices.contains(index) else { return }
         let url = siblings[index]
+        rememberEditsOnCurrentImage()
         loadToken += 1
         let token = loadToken
+
+        // Work you already did on this picture, put back. A saved session being
+        // opened outranks it — that is an explicit request for a particular state.
+        if pendingSession == nil, let cached = edits[url] {
+            pendingSession = cached
+            pendingIsCachedEdit = true
+        }
 
         window?.representedURL = url
         window?.title = url.lastPathComponent
@@ -786,9 +845,15 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         canvas.show(img)
 
         if let session = pendingSession {
+            let cached = pendingIsCachedEdit
             pendingSession = nil
+            pendingIsCachedEdit = false
             var d = canvas.display
+            // How you are looking at images — which channel, the overlays — is
+            // yours and carries across, exactly as it does for an unedited one.
+            let looking = (d.channel, d.showClipping, d.falseColour)
             session.apply(to: &d)
+            if cached { (d.channel, d.showClipping, d.falseColour) = looking }
             canvas.display = d
             canvas.cropAspect = nil
             if let path = session.lutPath, FileManager.default.fileExists(atPath: path) {
