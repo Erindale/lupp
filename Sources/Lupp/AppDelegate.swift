@@ -80,6 +80,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         present(url)
     }
 
+    /// Quitting has to ask too, or ⌘Q is a way round the warning that closing a
+    /// window puts up — and the faster route is the one people take.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        for c in controllers where !c.unsavedEdits().isEmpty {
+            c.window?.makeKeyAndOrderFront(nil)
+            if !c.confirmDiscardingEdits() { return .terminateCancel }
+        }
+        return .terminateNow
+    }
+
     /// Closing the last window quits. That also means Lupp never sits running
     /// with nothing open, which is why there is no Dock-reopen hook: there is no
     /// state it could fire in.

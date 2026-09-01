@@ -12,7 +12,7 @@ import simd
 /// Both a path and a bookmark are stored. The path is what a human can read and
 /// fix in a text editor; the bookmark is what still finds the file after it has
 /// been moved or renamed.
-struct Session: Codable {
+struct Session: Codable, Equatable {
     static let fileExtension = "lupp"
     /// Sessions written before the extension was shortened still open.
     static let legacyExtensions = ["luppsession"]

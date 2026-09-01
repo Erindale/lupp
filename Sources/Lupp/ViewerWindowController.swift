@@ -115,6 +115,17 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// In memory and for this window only. Nothing here is written to disk;
     /// sessions are still saved when you ask and not before.
     private var edits: [URL: Session] = [:]
+
+    /// What was last *written out* for each image — saved as a session, or
+    /// exported.
+    ///
+    /// This is what makes "unsaved" mean something. Lupp is non-destructive and
+    /// writes nothing unless asked, so almost every window has edits in it;
+    /// warning about all of them would be a dialog you learn to dismiss without
+    /// reading. Comparing against what actually reached disk means the warning
+    /// fires when work would genuinely be lost, and stays quiet when it would
+    /// not — including when you exported an image and then changed nothing.
+    private var committed: [URL: Session] = [:]
     /// Held while a batch runs, so the sheet is not released mid-export.
     private var bulkSheet: BulkExportSheet?
     private var lutSheet: LUTBakeSheet?
@@ -691,6 +702,57 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
 
+    // MARK: - Unsaved work
+
+    /// Images whose current state has never reached disk.
+    func unsavedEdits() -> [URL] {
+        allEdits().compactMap { url, session in
+            committed[url] == session ? nil : url
+        }.sorted { $0.path < $1.path }
+    }
+
+    /// Noted when work reaches disk, so it stops counting as unsaved.
+    private func markCommitted(_ url: URL, _ session: Session) {
+        committed[url] = session
+    }
+
+    /// Asked before a window closes and before the app quits.
+    ///
+    /// Three ways out rather than two: the useful answer to "you have unsaved
+    /// grades" is usually to write them, and having to cancel, find the button
+    /// and come back is a chore the dialog can simply remove.
+    func confirmDiscardingEdits() -> Bool {
+        let unsaved = unsavedEdits()
+        guard !unsaved.isEmpty else { return true }
+
+        let a = NSAlert()
+        a.messageText = unsaved.count == 1
+            ? "One image has edits that haven’t been saved or exported"
+            : "\(unsaved.count) images have edits that haven’t been saved or exported"
+        a.informativeText = unsaved.prefix(6).map { $0.lastPathComponent }
+            .joined(separator: "\n")
+            + (unsaved.count > 6 ? "\n…and \(unsaved.count - 6) more" : "")
+            + "\n\nYour source files are untouched either way — it’s the grades that would go."
+        a.addButton(withTitle: "Export All Edited…")
+        a.addButton(withTitle: "Cancel")
+        a.addButton(withTitle: "Discard")
+        switch a.runModal() {
+        case .alertFirstButtonReturn:
+            // Stay open and put the batch dialog up; closing again afterwards
+            // will find nothing left to warn about.
+            DispatchQueue.main.async { [weak self] in self?.bulkExport() }
+            return false
+        case .alertThirdButtonReturn:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        confirmDiscardingEdits()
+    }
+
     // MARK: - Grade as a LUT
 
     /// The menu's way in. Same action as the panel button, so the two cannot
@@ -803,6 +865,14 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
                            finished: { outcome in
                                sheet?.close()
                                self?.bulkSheet = nil
+                               // Only what actually landed: a file skipped for
+                               // already existing was not written, so the work
+                               // it stands for is still unsaved.
+                               for (url, session) in jobs
+                               where outcome.written.contains(
+                                   BulkExport.destination(for: url, options: options)) {
+                                   self?.markCommitted(url, session)
+                               }
                                self?.reportBulk(outcome)
                            })
         }
@@ -1190,6 +1260,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         do {
             try session.write(to: out)
             sessionURL = out
+            markCommitted(img.url, Session.from(canvas.display, image: img.url,
+                                                lutPath: currentLUTPath, bookmark: false))
         } catch {
             let a = NSAlert()
             a.messageText = "Couldn’t save the session"
@@ -1299,6 +1371,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         var props: [CFString: Any] = [:]
         if format == .jpeg { props[kCGImageDestinationLossyCompressionQuality] = 0.95 }
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
+        markCommitted(img.url, Session.from(canvas.display, image: img.url,
+                                            lutPath: currentLUTPath, bookmark: false))
         if !CGImageDestinationFinalize(dest) {
             let a = NSAlert()
             a.messageText = "Couldn’t write \(out.lastPathComponent)"

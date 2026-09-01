@@ -37,6 +37,7 @@ enum Selftest {
         pickerReportsUnclamped(in: dir)
         editsRoundTripPerImage(in: dir)
         gradeBakesToACube()
+        unsavedMeansUnwritten(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -1086,6 +1087,45 @@ enum Selftest {
         check("and the baked cube still spans black to white",
               bright.x > 0.9 && entry(grey, r: 0, g: 0, b: 0).x < 0.1,
               detail: String(format: "white corner %.3f", bright.x))
+    }
+
+    /// "Unsaved" has to mean *changed since it was last written*, not merely
+    /// edited.
+    ///
+    /// Lupp writes nothing unless asked, so almost every open window has edits
+    /// in it. A warning that fired on all of them would be a dialog you learn to
+    /// dismiss without reading, which is worse than none — so the comparison is
+    /// against what actually reached disk, and it has to notice both that an
+    /// unchanged export is safe and that a later tweak is not.
+    private static func unsavedMeansUnwritten(in dir: URL) {
+        let image = dir.appendingPathComponent("frame.png")
+        var d = Renderer.DisplayState()
+        d.exposureEV = 0.75
+        let edited = Session.from(d, image: image, lutPath: nil, bookmark: false)
+
+        // Nothing written yet.
+        check("an edit with nothing written counts as unsaved",
+              Session?.none != edited, detail: "an unwritten edit looked saved")
+
+        // Exported, unchanged since: nothing to warn about.
+        let committed = Session.from(d, image: image, lutPath: nil, bookmark: false)
+        check("the same state written out stops counting", committed == edited,
+              detail: "an unchanged export still looked unsaved")
+
+        // Touched again afterwards: it counts once more.
+        var after = d
+        after.exposureEV = 0.9
+        let changed = Session.from(after, image: image, lutPath: nil, bookmark: false)
+        check("a change made after writing counts again", changed != committed,
+              detail: "an edit after export was not noticed")
+
+        // The crop is part of it — undo excludes it, this must not.
+        var cropped = d
+        cropped.cropEnabled = true
+        cropped.crop = SIMD4<Float>(0.1, 0.1, 0.8, 0.8)
+        check("a crop counts as unsaved work too",
+              Session.from(cropped, image: image, lutPath: nil, bookmark: false) != committed,
+              detail: "a crop made after export was not noticed")
     }
 
     private static func firstStack(in view: NSView) -> NSStackView? {

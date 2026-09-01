@@ -428,6 +428,15 @@ path and a file-system bookmark are stored: the path is what you can read and fi
 in a text editor, the bookmark is what still finds the file after it has been
 moved or renamed.
 
+**Closing a window with unsaved grades asks first.** Not because anything is at
+risk in the file — the source is never touched — but because the work standing on
+it would go. "Unsaved" means *changed since it was last written*: an image you
+exported and then left alone doesn't count, and one you tweaked afterwards does.
+Lupp writes nothing unless asked, so a warning that fired on every edited window
+would be a dialog you learn to dismiss without reading. The alert offers to run
+the batch export there and then, since that is usually the answer. ⌘Q asks too —
+a warning the faster route walks around isn't one.
+
 **A session is only ever written when you ask for one.** There is no autosave and
 no periodic write; open an image, grade it, close it, and nothing is left behind.
 Sessions are for the occasional image worth coming back to, not a record of
