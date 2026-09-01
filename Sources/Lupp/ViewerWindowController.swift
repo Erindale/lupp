@@ -645,7 +645,30 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         }
     }
 
-    private let undo = UndoManager()
+    /// One history per image.
+    ///
+    /// A single window-wide manager had to be emptied on every navigation, since
+    /// undoing back into the grade you had on the previous file would put
+    /// someone else's photograph on screen. That made undo useless the moment
+    /// you looked at the next frame — and now that each picture keeps its own
+    /// edits, its own history is the matching half of the same idea.
+    ///
+    /// Kept even for an image whose edits were undone back to neutral, so the
+    /// reset that got you there is itself undoable.
+    private var undoStacks: [URL: UndoManager] = [:]
+    /// Used only while no image is open, so the Edit menu has something to ask.
+    private let noImageUndo = UndoManager()
+
+    private var undo: UndoManager {
+        guard let url = canvas.image?.url else { return noImageUndo }
+        if let existing = undoStacks[url] { return existing }
+        let made = UndoManager()
+        // A grade snapshot is a few hundred bytes, so this bound is about not
+        // growing without limit during a long session rather than about size.
+        made.levelsOfUndo = 200
+        undoStacks[url] = made
+        return made
+    }
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
 
@@ -895,9 +918,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         canvas.cropAspect = nil
         currentLUTPath = nil
         currentPresetName = nil
-        // A new picture is a new history. Undoing back into the grade you had
-        // on the previous file would put someone else's photograph on screen.
-        undo.removeAllActions()
+        // No history to clear: each image has its own, and this one's is
+        // whatever it was when you last looked at it. Only the half-finished
+        // edit is dropped, since it belonged to the picture you just left.
         editSnapshot = nil
 
         refreshLibrary()
