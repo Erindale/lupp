@@ -604,6 +604,62 @@ enum Selftest {
         check("an identity LUT changes nothing", untouched,
               detail: "grey \(p[2]) -> \(iden[2]), red \(p[0]) -> \(iden[0])")
 
+        // Where the LUT sits in the chain, pinned by an experiment that gives a
+        // different answer each way round.
+        //
+        // The cube swaps red and green. Move the tetra's red corner onto green
+        // and feed it a red pixel: applied last, the LUT sees the warp's green
+        // and hands back red. Applied first it would see red, pass green through
+        // a green corner nothing has moved, and leave green on screen. So the
+        // colour of one pixel says which order the shader is really using.
+        let swapURL = dir.appendingPathComponent("swap-rg.cube")
+        var swapLines = ["LUT_3D_SIZE 2"]
+        for b in 0..<2 { for g in 0..<2 { for r in 0..<2 {
+            swapLines.append("\(g).0 \(r).0 \(b).0")     // out = (g, r, b)
+        }}}
+        if (try? swapLines.joined(separator: "\n").write(to: swapURL, atomically: true,
+                                                         encoding: .utf8)) != nil,
+           let swapLUT = try? CubeLUT.parse(url: swapURL), renderer.loadLUT(swapLUT) {
+            var ordered = plain
+            ordered.lutAmount = 1
+            ordered.tetraActive = true
+            ordered.tetra.red = SIMD4<Float>(0, 1, 0, 0)
+            if let o = pixels(ordered) {
+                check("a display LUT is applied after the cube warp",
+                      o[0][0] > 200 && o[0][1] < 60,
+                      detail: "red became \(o[0]); green would mean the LUT ran first")
+            }
+            _ = renderer.loadLUT(idLUT)      // put the identity back for later checks
+        } else {
+            fail("LUT order", "could not build the swap cube")
+        }
+
+        // The consequence of being last, and the thing a toning LUT is for: it
+        // must be able to put colour back into an image saturation flattened.
+        // Needs a cube that actually tints — swapping two channels of a grey
+        // leaves it grey, which is how the first attempt at this check passed
+        // nothing and failed honestly.
+        let toneURL = dir.appendingPathComponent("tone.cube")
+        var toneLines = ["LUT_3D_SIZE 2"]
+        for b in 0..<2 { for g in 0..<2 { for r in 0..<2 {
+            toneLines.append("\(r).0 \(Double(g) * 0.5) \(Double(b) * 0.2)")
+        }}}
+        if (try? toneLines.joined(separator: "\n").write(to: toneURL, atomically: true,
+                                                         encoding: .utf8)) != nil,
+           let toneLUT = try? CubeLUT.parse(url: toneURL), renderer.loadLUT(toneLUT) {
+            var toned = plain
+            toned.lutAmount = 1
+            toned.saturation = 0
+            if let t = pixels(toned) {
+                check("a LUT can recolour what saturation flattened",
+                      Int(t[0][0]) > Int(t[0][2]) + 30,
+                      detail: "monochrome red through a warm LUT became \(t[0])")
+            }
+            _ = renderer.loadLUT(idLUT)
+        } else {
+            fail("LUT order", "could not build the tone cube")
+        }
+
         // A mid-grey source: sRGB 128 decodes to linear 0.21586, close enough to
         // 0.18 to compare against the published anchors with a loose tolerance.
         for (input, expected, name) in [(LUTInput.sLog3, 0.42, "S-Log3"),

@@ -125,12 +125,10 @@ with the reference transforms.
 
 ## Grading
 
-The chain runs: **light** in linear, then the **view transform**, then the
-**LUT**, then the **cube warp**, then **saturation**, then what to do with the
-result. The panel lists light, the cube warp and saturation in that order; the
-LUT sits lower down with the presets and export, so panel order and pipeline
-order agree everywhere except the LUT, which is applied before the cube warp
-rather than after it.
+The colour panel reads top to bottom in the order the pixels travel: **light** in
+linear, then the **view transform**, then the **cube warp**, then **saturation**,
+then a **display LUT** last of all, then what to do with the result. Crop is not a
+colour operation and simply sits where it is convenient.
 
 **Every section has a bypass** beside its title, and there's a master one at the
 top (`B`). Lit means applied, dimmed means bypassed. A bypassed section keeps its
@@ -163,7 +161,7 @@ Contrast pivots on 0.18 scene grey by default, rather than on whatever 0.5 means
 in the current encoding.
 
 **Saturation** comes *after* the cube warp, which is the whole point of where it
-sits. Pulled to zero it renders the luma of whatever the corners just did, so the
+sits, and before a display LUT. Pulled to zero it renders the luma of whatever the corners just did, so the
 six hue corners become a channel mixer for black and white — drop the cyan
 corner's green and a teal sky goes heavy and dramatic without touching skin. In
 front of the warp it could only ever be a fader on the original colours.
@@ -210,12 +208,21 @@ A `.cube` is a lookup with no idea what space its input is in — the author sim
 assumed one. Get it wrong and the LUT is applied to the wrong numbers, which
 looks like a bad grade rather than like a mistake. So the input is a setting:
 
-- **Display (sRGB)** — the usual creative LUT, applied after the view transform.
+- **Display (sRGB)** — the usual creative LUT, and the last thing that happens
+  to the picture: a look laid over a finished grade. One consequence worth
+  knowing is that it will put colour back into an image saturation took out,
+  which is exactly what a toning LUT is for and what the bypass is for when it
+  isn't.
 - **S-Log3**, **LogC3 (ARRI)**, **ACEScct**, **V-Log (Panasonic)** — the LUT is
-  fed log-encoded scene
-  values instead. A log LUT is almost always the display rendering itself (log
-  in, Rec.709 out), so choosing one means the LUT *replaces* the view transform
-  rather than sitting on top of it. Tone-mapping twice would be wrong.
+  fed log-encoded scene values instead. A log LUT is almost always the display
+  rendering itself (log in, Rec.709 out), so choosing one means the LUT
+  *replaces* the view transform rather than sitting on top of it. Tone-mapping
+  twice would be wrong.
+
+  This is also the one case where the LUT is **not** last. It takes linear scene
+  values, and by the end of the chain there are none left to give it — standing
+  in for the view transform means happening where the view transform happens, so
+  the cube warp and saturation come after it rather than before.
 
 **The limit worth knowing:** these are transfer curves only. A LUT authored for
 S-Log3 usually also expects S-Gamut3 *primaries*, and nothing in an image file

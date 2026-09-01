@@ -139,7 +139,7 @@ final class GradePanel: SidePanel {
         exportButton.translatesAutoresizingMaskIntoConstraints = false
 
         let tetraNote = caption("Moves the six hue corners of the RGB cube. Black, white and the greys between them are fixed, so neutrals stay neutral.")
-        let lutNote = caption("Display LUTs apply after the view transform. Choosing a log input instead means the LUT is the display rendering — it gets log-encoded scene values and its output is taken as final, so the view transform steps aside rather than tone-mapping twice.")
+        let lutNote = caption("A display LUT is the last thing applied — the look laid over a finished grade, so it will put colour back into anything saturation took out. Choosing a log input instead means the LUT is the display rendering: it gets log-encoded scene values and its output is taken as final, so it stands in for the view transform rather than tone-mapping twice, and necessarily happens earlier in the chain.")
         let exportNote = caption("Writes the image as shown — transform, LUT, grade and exposure baked in, at full resolution.")
 
         let lightNote = caption("Linear, before the view transform — these behave like light, not like edits to a finished picture. Black and white point set what counts as black and white first; contrast pivots on 0.18 scene grey.")
@@ -207,10 +207,9 @@ final class GradePanel: SidePanel {
         column += [separator(), saturationHeader, saturationRow,
                    caption("How much colour survives, taken after the cube warp — so pulling it to zero renders the luma of whatever the corners just did, and the six hue corners become a channel mixer for black and white.")]
 
-        // Light, the cube warp and saturation are listed in the order they are
-        // applied. The LUT is the exception: it sits down here with the presets
-        // and export, but the shader applies it *before* the cube warp — so this
-        // layout does not describe its position in the chain.
+        // Order down the panel is the order the pixels travel: light, then the
+        // cube warp, then saturation, then a display LUT last of all. Crop is
+        // not a colour operation and simply sits where it is convenient.
         column += [separator(),
                    cropHeader, cropAspect, cropApply, cropSize, cropNote,
                    separator(),

@@ -835,6 +835,11 @@ final class Renderer {
             // A log LUT *is* the display rendering: feed it the log-encoded scene
             // values and take its output as already display-referred. Running the
             // view transform as well would tone-map twice.
+            //
+            // This is also why a log LUT cannot move to the end of the chain the
+            // way a display LUT does. It takes linear scene values, and by the
+            // end of the chain there are none left to give it — it stands in for
+            // the view transform, so it happens where the view transform happens.
             float3 lv = linearToLog(max(rgb, 0.0), u.lutInput);
             float3 looked = lut.sample(lutSmp, lutCoord(lv, u)).rgb;
             // Blended against the ordinary look, so the amount slider still means
@@ -843,24 +848,30 @@ final class Renderer {
                       looked, u.lutAmount);
         } else {
             enc = clamp(linearToSrgb(applyView(rgb, u.viewTransform)), 0.0, 1.0);
-            if (u.lutEnabled != 0u && u.lutAmount > 0.0) {
-                enc = mix(enc, lut.sample(lutSmp, lutCoord(enc, u)).rgb, u.lutAmount);
-            }
         }
 
         if (u.tetraEnabled != 0u && u.tetraAmount > 0.0) {
             enc = clamp(mix(enc, tetraInterp(enc, tetra), u.tetraAmount), 0.0, 1.0);
         }
 
-        // Saturation last, and deliberately after the cube warp rather than
-        // before it. Pulled to zero it renders the luma of whatever the corners
-        // just did, so the six hue corners become a channel mixer for black and
-        // white — move the blues down and a sky goes heavy without touching the
-        // skin. Before the warp it would only ever be a fader on the original
-        // colours, which is a much duller instrument.
+        // Saturation after the cube warp rather than before it. Pulled to zero it
+        // renders the luma of whatever the corners just did, so the six hue
+        // corners become a channel mixer for black and white — move the blues
+        // down and a sky goes heavy without touching the skin. Before the warp it
+        // would only ever be a fader on the original colours, which is a much
+        // duller instrument.
         if (u.saturation != 1.0) {
             float grey = dot(enc, float3(0.2126, 0.7152, 0.0722));
             enc = clamp(mix(float3(grey), enc, u.saturation), 0.0, 1.0);
+        }
+
+        // A display LUT is the last thing that happens, because that is what a
+        // look is: laid over a finished grade, not buried inside one. It follows
+        // that a LUT will put colour back into an image saturation took out —
+        // which is the point of a toning LUT, and is what the bypass is for when
+        // it isn't.
+        if (u.lutEnabled != 0u && u.lutInput == 0u && u.lutAmount > 0.0) {
+            enc = mix(enc, lut.sample(lutSmp, lutCoord(enc, u)).rgb, u.lutAmount);
         }
         rgb = srgbToLinear(enc);
 
