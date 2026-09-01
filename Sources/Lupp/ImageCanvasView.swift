@@ -69,6 +69,17 @@ final class ImageCanvasView: MTKView {
     /// Told which file was picked, since opening one is the controller's job.
     var onOpenRecent: ((URL) -> Void)?
 
+    /// Armed by the white-balance eyedropper. The next click on the picture
+    /// names a pixel that ought to be grey, instead of panning.
+    var isPickingNeutral = false {
+        didSet {
+            NSCursor.crosshair.set()
+            if !isPickingNeutral { window?.invalidateCursorRects(for: self) }
+        }
+    }
+    /// The pixel you picked, in source coordinates.
+    var onPickedNeutral: ((Int, Int) -> Void)?
+
     private var spaceHeld = false
     private var panning = false
     private var trackingAreaRef: NSTrackingArea?
@@ -425,6 +436,18 @@ final class ImageCanvasView: MTKView {
     // it can't be the primary gesture: macOS Mouse settings routinely bind
     // button 3 to Mission Control, and trackpads have no middle button at all.
     override func mouseDown(with e: NSEvent) {
+        if isPickingNeutral {
+            // Consume the click: picking is a one-shot mode, and panning from
+            // the same press would move the picture out from under the pixel you
+            // just named.
+            let p = convert(e.locationInWindow, from: nil)
+            let ip = viewport.imagePoint(fromView: p)
+            let o = cropOrigin
+            let x = Int(floor(ip.x)) + o.x, y = Int(floor(ip.y)) + o.y
+            isPickingNeutral = false
+            if image?.sample(x: x, y: y) != nil { onPickedNeutral?(x, y) }
+            return
+        }
         // Clicking the picture takes the keyboard back. AppKit does not move
         // first responder on a click by itself, so after typing in a panel field
         // the field editor keeps it — and every bare-key shortcut stays dead

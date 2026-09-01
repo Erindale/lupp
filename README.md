@@ -161,6 +161,16 @@ Export writes the crop **at its own pixel size**, not the whole frame with the
 edges painted out. It's a window into the source texture, so a cropped export
 goes through the same shader as everything else.
 
+**White balance from a pixel.** The eyedropper beside the white balance title
+arms a pick; click something in the picture that ought to be grey and the gains
+solve for it. Green is held at 1 and the others solved against it, so the picture
+keeps its brightness. It works from the file's own linear values rather than from
+what is on screen, so picking twice doesn't wander.
+
+**Copy and paste a grade** (⌥⌘C / ⌥⌘V) between images and between windows —
+option-modified so ⌘C and ⌘V stay ordinary copy and paste, since the panel is
+full of text fields.
+
 **Light** — black and white point, exposure (EV), a three-channel white balance,
 and a contrast with an adjustable pivot. Black and white point come first, since
 they say what counts as black and white in the source and everything after works

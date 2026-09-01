@@ -355,6 +355,16 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         grade.onExport = { [weak self] in self?.exportImage(nil) }
         grade.onBulkExport = { [weak self] in self?.bulkExport() }
         grade.onExportLUT = { [weak self] in self?.exportGradeAsLUT() }
+        grade.onPickWhiteBalance = { [weak self] in
+            guard let self, self.canvas.image != nil else { NSSound.beep(); return }
+            // A second press cancels, so arming it by accident costs nothing.
+            self.canvas.isPickingNeutral.toggle()
+            self.grade.setPickingWhiteBalance(self.canvas.isPickingNeutral)
+        }
+        canvas.onPickedNeutral = { [weak self] x, y in
+            self?.grade.setPickingWhiteBalance(false)
+            self?.balanceOnNeutral(x: x, y: y)
+        }
         grade.onEditBegan = { [weak self] in self?.beginEdit() }
         grade.onEditEnded = { [weak self] in self?.endEdit() }
         grade.onLoadLUT = { [weak self] in self?.loadLUT() }
@@ -701,6 +711,72 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
+
+    // MARK: - White balance from a pixel
+
+    /// Solve the gains that make one picked pixel neutral.
+    ///
+    /// Working from the file's own linear values rather than what is on screen:
+    /// the gains have to be the answer for the source, not for the result of
+    /// whatever gains are already set, or picking twice would wander.
+    ///
+    /// Only the black point matters besides — it is subtracted before the gains
+    /// and so changes the ratios. Exposure and the white point scale all three
+    /// channels alike and cannot affect what counts as neutral.
+    ///
+    /// Green is held at 1 and the others solved against it, so the picture keeps
+    /// roughly the brightness it had. A pixel with nothing in a channel can't
+    /// say what neutral means, so it is refused rather than answered with a
+    /// division by zero.
+    private func balanceOnNeutral(x: Int, y: Int) {
+        guard let img = canvas.image, let c = img.sample(x: x, y: y) else { return }
+        let black = canvas.display.blackPoint
+        let r = c.x - black, g = c.y - black, b = c.z - black
+        guard r > 0.0005, g > 0.0005, b > 0.0005 else {
+            let a = NSAlert()
+            a.messageText = "That pixel can’t define neutral"
+            a.informativeText = "It has nothing in at least one channel — pick something grey with light in it, not a black or a blown highlight."
+            a.runModal()
+            return
+        }
+        beginEdit()
+        var d = canvas.display
+        d.whiteBalance = SIMD3(g / r, 1, g / b)
+        // Picking is pointless if the section it feeds is switched off.
+        d.whiteBalanceOn = true
+        canvas.display = d
+        rememberGrade()
+        syncPanelControls()
+        recomputeScopes()
+        endEdit()
+    }
+
+    // MARK: - Carrying a grade by hand
+
+    /// The grade on the clipboard, such as it is.
+    ///
+    /// Deliberately not the system pasteboard: this is for moving a look between
+    /// two pictures a few seconds apart, not between applications, and putting it
+    /// on the real clipboard would quietly cost you whatever text was on there.
+    /// Shared across windows, which is the only place it needs to travel.
+    private static var copiedGrade: Preset?
+
+    @objc func copyGrade(_ sender: Any?) {
+        guard canvas.image != nil else { NSSound.beep(); return }
+        var p = currentGrade()
+        p.name = ""
+        ViewerWindowController.copiedGrade = p
+    }
+
+    @objc func pasteGrade(_ sender: Any?) {
+        guard canvas.image != nil, let p = ViewerWindowController.copiedGrade else {
+            NSSound.beep(); return
+        }
+        // One undoable step, like any other single change.
+        beginEdit()
+        apply(grade: p)
+        endEdit()
+    }
 
     // MARK: - Unsaved work
 

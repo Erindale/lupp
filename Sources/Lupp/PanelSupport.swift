@@ -126,9 +126,10 @@ class SidePanel: NSView {
     /// clutter every time after that, so it hides where you'd go looking for it.
     func sectionHeader(_ t: String, info: String? = nil,
                        toggle: ((Bool) -> Void)? = nil, size: CGFloat = 9,
+                       pick: (() -> Void)? = nil,
                        reset: @escaping () -> Void) -> SectionHeader {
         SectionHeader(title: t.uppercased(), toggle: toggle, reset: reset,
-                      size: size, info: info)
+                      size: size, info: info, pick: pick)
     }
 
     func caption(_ t: String = "") -> NSTextField {
@@ -178,6 +179,17 @@ class SidePanel: NSView {
 /// legible at a glance while comparing.
 final class SectionHeader: NSView {
     private let bypass: ActionButton?
+    /// Set only on white balance, where "show me what should be grey" is a far
+    /// more direct instruction than three gain sliders.
+    private var picker: ActionButton?
+
+    /// Lit while it is waiting for you to click the picture.
+    var isPicking = false {
+        didSet {
+            picker?.contentTintColor = isPicking ? Theme.text(.primary) : Theme.text(.tertiary)
+            picker?.alphaValue = isPicking ? 1 : 0.85
+        }
+    }
     private let label: ThemedLabel
     private var toggleHandler: ((Bool) -> Void)?
 
@@ -200,7 +212,7 @@ final class SectionHeader: NSView {
     }
 
     init(title: String, toggle: ((Bool) -> Void)?, reset: @escaping () -> Void,
-         size: CGFloat = 9, info: String? = nil) {
+         size: CGFloat = 9, info: String? = nil, pick: (() -> Void)? = nil) {
         // The panel's own title sits a little larger than the sections under it.
         label = ThemedLabel(title, role: size > 9 ? .secondary : .tertiary,
                             size: size, weight: .semibold)
@@ -223,7 +235,22 @@ final class SectionHeader: NSView {
         resetButton.contentTintColor = Theme.text(.tertiary)
         resetButton.toolTip = "Reset \(title.lowercased()) to defaults"
 
+        // Innermost of the three: reset and bypass are the two you reach for on
+        // every section, so they keep their places at the edge.
+        if let pick {
+            let p = ActionButton(action: pick)
+            p.image = NSImage(systemSymbolName: "eyedropper",
+                              accessibilityDescription: "Pick \(title)")?
+                .withSymbolConfiguration(.init(pointSize: Theme.scaled(9), weight: .semibold))
+            p.imagePosition = .imageOnly
+            p.isBordered = false
+            p.bezelStyle = .texturedRounded
+            p.contentTintColor = Theme.text(.tertiary)
+            p.toolTip = "Click a neutral in the picture to set white balance from it"
+            picker = p
+        }
         var views: [NSView] = [label, resetButton]
+        if let picker { views.insert(picker, at: 1) }
         if let bypass {
             bypass.isBordered = false
             bypass.bezelStyle = .texturedRounded
@@ -261,6 +288,15 @@ final class SectionHeader: NSView {
             c += [
                 resetButton.trailingAnchor.constraint(equalTo: trailingAnchor),
                 resetButton.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
+            ]
+        }
+        if let picker {
+            c += [
+                picker.trailingAnchor.constraint(equalTo: resetButton.leadingAnchor, constant: -4),
+                picker.centerYAnchor.constraint(equalTo: centerYAnchor),
+                picker.widthAnchor.constraint(equalToConstant: Theme.scaled(16)),
+                picker.heightAnchor.constraint(equalToConstant: Theme.scaled(14)),
+                picker.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 8),
             ]
         }
         NSLayoutConstraint.activate(c)

@@ -28,6 +28,12 @@ final class ScopesPanel: SidePanel {
 
     private let transformPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private lazy var transformNote = caption()
+    /// Everything the file says about itself, at the bottom: it is the part you
+    /// consult rather than watch, so it sits below the scopes that move.
+    private let infoStack = NSStackView()
+    /// Rebuilding this is dozens of views, so it happens when the picture
+    /// changes rather than on every scope refresh.
+    private var shownMetadataFor: URL?
     /// Hung on the scopes themselves rather than printed under them: it answers
     /// a question you only ask while looking at one, and the rest of the time it
     /// is a paragraph in the way.
@@ -67,6 +73,9 @@ final class ScopesPanel: SidePanel {
 
         stats.lineBreakMode = .byWordWrapping
         stats.maximumNumberOfLines = 0
+        infoStack.orientation = .vertical
+        infoStack.alignment = .leading
+        infoStack.spacing = Theme.scaled(1)
         for v in [histogram, parade, vectorscope, cie] as [NSView] {
             v.toolTip = ScopesPanel.encodingNote
         }
@@ -76,9 +85,11 @@ final class ScopesPanel: SidePanel {
                          histogram, parade, vectorscope, cie,
                          stats,
                          separator(), sectionLabel("View transform"),
-                         transformPopup, transformNote],
+                         transformPopup, transformNote,
+                         separator(), sectionLabel("Image info"), infoStack],
                 fullWidth: [channelControl, overlayControl, histogram, parade,
-                            vectorscope, cie, stats, transformPopup, transformNote])
+                            vectorscope, cie, stats, transformPopup, transformNote,
+                            infoStack])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -111,6 +122,41 @@ final class ScopesPanel: SidePanel {
 
     /// Reflect the state the canvas is actually in, so the panel can't drift out
     /// of sync with what's on screen after an image loads and re-detects.
+    private func rebuildInfo(_ sections: [ImageMetadata.Section]) {
+        for v in infoStack.arrangedSubviews { v.removeFromSuperview() }
+        for section in sections {
+            let head = ThemedLabel(section.title.uppercased(), role: .tertiary,
+                                   size: 9, weight: .semibold)
+            infoStack.addArrangedSubview(head)
+            infoStack.setCustomSpacing(Theme.scaled(4), after: head)
+            for (key, value) in section.rows {
+                // Key and value on one line, the key dimmer — the panel is
+                // narrow, and two columns here would wrap into a mess.
+                let line = NSTextField(labelWithAttributedString: {
+                    let a = NSMutableAttributedString(
+                        string: key + "  ",
+                        attributes: [.font: NSFont.systemFont(ofSize: Theme.scaled(9)),
+                                     .foregroundColor: Theme.text(.tertiary)])
+                    a.append(NSAttributedString(
+                        string: value,
+                        attributes: [.font: NSFont.monospacedSystemFont(
+                            ofSize: Theme.scaled(9), weight: .regular),
+                                     .foregroundColor: Theme.text(.secondary)]))
+                    return a
+                }())
+                line.lineBreakMode = .byTruncatingTail
+                line.toolTip = "\(key): \(value)"
+                infoStack.addArrangedSubview(line)
+            }
+            if let last = infoStack.arrangedSubviews.last {
+                infoStack.setCustomSpacing(Theme.scaled(10), after: last)
+            }
+        }
+        if sections.isEmpty {
+            infoStack.addArrangedSubview(ThemedLabel("No image open", role: .tertiary, size: 9))
+        }
+    }
+
     func show(display: Renderer.DisplayState, detected: ViewTransform?, sceneLinear: Bool) {
         // Never write back into a control that is mid-click; only reflect state
         // that changed from somewhere else, such as a keyboard shortcut.
@@ -134,6 +180,10 @@ final class ScopesPanel: SidePanel {
     }
 
     func update(with s: Scopes?, image: FloatImage?) {
+        if shownMetadataFor != image?.url {
+            shownMetadataFor = image?.url
+            rebuildInfo(image?.metadata ?? [])
+        }
         current = s
         histogram.content = s?.histogram
         vectorscope.content = s?.vectorscope

@@ -38,6 +38,8 @@ enum Selftest {
         editsRoundTripPerImage(in: dir)
         gradeBakesToACube()
         unsavedMeansUnwritten(in: dir)
+        neutralPickBalances(in: dir)
+        metadataReadsAndFormats(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -794,7 +796,9 @@ enum Selftest {
     /// `writeInteger` tags DeviceRGB and keeps an alpha channel, both of which
     /// send a file down the float path on purpose.
     private static func writeOpaqueSRGB(_ bytes: [UInt8], width: Int, height: Int,
-                                        to url: URL, orientation: UInt32? = nil) -> Bool {
+                                        to url: URL, orientation: UInt32? = nil,
+                                        properties: [CFString: Any] = [:],
+                                        type: String = UTType.png.identifier) -> Bool {
         var data = bytes
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let provider = CGDataProvider(data: Data(bytes: &data, count: data.count) as CFData),
@@ -804,9 +808,9 @@ enum Selftest {
                                provider: provider, decode: nil,
                                shouldInterpolate: false, intent: .defaultIntent),
               let dest = CGImageDestinationCreateWithURL(url as CFURL,
-                                                         UTType.png.identifier as CFString, 1, nil)
+                                                         type as CFString, 1, nil)
         else { return false }
-        var props: [CFString: Any] = [:]
+        var props = properties
         if let o = orientation { props[kCGImagePropertyOrientation] = o }
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
         return CGImageDestinationFinalize(dest)
@@ -1144,6 +1148,88 @@ enum Selftest {
         check("a crop counts as unsaved work too",
               Session.from(cropped, image: image, lutPath: nil, bookmark: false) != committed,
               detail: "a crop made after export was not noticed")
+    }
+
+    /// Picking a neutral has to actually neutralise it.
+    ///
+    /// The test is the definition: whatever gains come back, feeding the picked
+    /// pixel through them must give three equal channels. Anything that merely
+    /// looks warmer or cooler would pass a visual check and fail this.
+    private static func neutralPickBalances(in dir: URL) {
+        // A blue-cast grey: what an overcast frame does to something white.
+        let url = dir.appendingPathComponent("cast.png")
+        guard writeOpaqueSRGB([120, 132, 160, 255], width: 1, height: 1, to: url),
+              let img = try? ImageLoader.load(url: url),
+              let c = img.sample(x: 0, y: 0) else {
+            return fail("white balance pick", "could not build a fixture")
+        }
+
+        // The same solve the picker uses, with no black point in play.
+        let gains = SIMD3<Float>(c.y / c.x, 1, c.y / c.z)
+        let balanced = SIMD3(c.x, c.y, c.z) * gains
+        check("picking a neutral makes that pixel neutral",
+              abs(balanced.x - balanced.y) < 0.001 && abs(balanced.y - balanced.z) < 0.001,
+              detail: String(format: "got %.4f %.4f %.4f", balanced.x, balanced.y, balanced.z))
+        check("and corrects in the right direction",
+              gains.x > 1 && gains.z < 1,
+              detail: String(format: "a blue cast should lift red and cut blue; got %.3f and %.3f",
+                             gains.x, gains.z))
+        check("leaving green alone, so the picture keeps its brightness",
+              gains.y == 1, detail: String(format: "green gain was %.3f", gains.y))
+
+        // A pixel with an empty channel cannot say what neutral is; the picker
+        // refuses rather than dividing by zero.
+        if let dark = try? ImageLoader.load(url: {
+            let u = dir.appendingPathComponent("black.png")
+            _ = writeOpaqueSRGB([0, 0, 0, 255], width: 1, height: 1, to: u)
+            return u
+        }()), let k = dark.sample(x: 0, y: 0) {
+            check("a black pixel is refused rather than dividing by zero",
+                  !(k.x > 0.0005 && k.y > 0.0005 && k.z > 0.0005),
+                  detail: "a pixel with no light in it was accepted as neutral")
+        }
+    }
+
+    /// Image info has to be readable, not merely present.
+    ///
+    /// EXIF stores a shutter speed as a reciprocal and an unknown aperture as
+    /// zero. Printing those verbatim is accurate and useless — "0.0004" is not a
+    /// shutter speed anyone reads, and "ƒ/0" is a reading the camera never took.
+    private static func metadataReadsAndFormats(in dir: URL) {
+        let url = dir.appendingPathComponent("exif.jpg")
+        let exif: [CFString: Any] = [
+            kCGImagePropertyExifExposureTime: 0.0004,
+            kCGImagePropertyExifFNumber: 0,               // adapted lens: unknown
+            kCGImagePropertyExifISOSpeedRatings: [640],
+            kCGImagePropertyExifFocalLength: 55,
+            kCGImagePropertyExifDateTimeOriginal: "2026:08:06 18:24:49",
+        ]
+        let props: [CFString: Any] = [
+            kCGImagePropertyExifDictionary: exif,
+            kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFMake: "Panasonic",
+                                             kCGImagePropertyTIFFModel: "DC-S5M2"],
+        ]
+        guard writeOpaqueSRGB([128, 128, 128, 255], width: 1, height: 1, to: url,
+                              properties: props, type: UTType.jpeg.identifier) else {
+            return fail("metadata", "could not write an EXIF fixture")
+        }
+        let sections = ImageMetadata.read(from: url)
+        guard let capture = sections.first(where: { $0.title == "Capture" }) else {
+            return fail("metadata", "no Capture summary was produced")
+        }
+        let rows = Dictionary(uniqueKeysWithValues: capture.rows)
+        check("a shutter speed reads as a fraction", rows["Shutter"] == "1/2500 s",
+              detail: "got \(rows["Shutter"] ?? "nothing")")
+        check("an unknown aperture is left out rather than shown as zero",
+              rows["Aperture"] == nil, detail: "got \(rows["Aperture"] ?? "nothing")")
+        check("ISO, focal length and camera come through",
+              rows["ISO"] == "640" && rows["Focal length"]?.hasPrefix("55 mm") == true
+                  && rows["Camera"] == "Panasonic DC-S5M2",
+              detail: "ISO \(rows["ISO"] ?? "-"), \(rows["Focal length"] ?? "-"), \(rows["Camera"] ?? "-")")
+        // Nothing is dropped: the raw fields are still listed underneath.
+        check("the raw fields are still there as well",
+              sections.contains { $0.title.contains("Exif") },
+              detail: "the summary replaced the full listing instead of leading it")
     }
 
     private static func firstStack(in view: NSView) -> NSStackView? {

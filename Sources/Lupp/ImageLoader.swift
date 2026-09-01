@@ -88,7 +88,9 @@ enum ImageLoader {
             url: url, typeIdentifier: typeID, sourceBitDepth: depth,
             sourceColorSpace: shortColorSpaceName(csName),
             fullWidth: turned ? fullH : fullW, fullHeight: turned ? fullW : fullH,
-            wasDownsampled: downsampled, maxComponent: buf.maxComponent)
+            wasDownsampled: downsampled, maxComponent: buf.maxComponent,
+            // Read here because this is already the thread that went to the file.
+            metadata: ImageMetadata.read(from: url))
     }
 
     /// Whether this image can be kept as sRGB bytes instead of linear floats.

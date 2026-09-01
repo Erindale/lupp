@@ -278,6 +278,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")),
                                     keyEquivalent: "z")
         redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        // Option-modified so ⌘C and ⌘V stay ordinary copy and paste — the panel
+        // is full of text fields, and taking those over would be a poor trade
+        // for a shortcut you use a few times a folder.
+        let copyGrade = editMenu.addItem(withTitle: "Copy Grade",
+                                         action: #selector(ViewerWindowController.copyGrade(_:)),
+                                         keyEquivalent: "c")
+        copyGrade.keyEquivalentModifierMask = [.command, .option]
+        let pasteGrade = editMenu.addItem(withTitle: "Paste Grade",
+                                          action: #selector(ViewerWindowController.pasteGrade(_:)),
+                                          keyEquivalent: "v")
+        pasteGrade.keyEquivalentModifierMask = [.command, .option]
+
         let editItem = NSMenuItem()
         editItem.submenu = editMenu
 

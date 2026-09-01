@@ -26,6 +26,8 @@ final class GradePanel: SidePanel {
     var onExport: (() -> Void)?
     var onBulkExport: (() -> Void)?
     var onExportLUT: (() -> Void)?
+    /// Asked to arm the white-balance picker, or to disarm it if already armed.
+    var onPickWhiteBalance: (() -> Void)?
     var onBypass: ((Section, Bool) -> Void)?
     /// Aspect ratio as width/height, or nil for free.
     var onCropAspect: ((Double?) -> Void)?
@@ -183,6 +185,7 @@ final class GradePanel: SidePanel {
         wbHeader = sectionHeader("White balance",
                                  toggle: { [weak self] on in
                                      self?.discrete { self?.onBypass?(.whiteBalance, on) } },
+                                 pick: { [weak self] in self?.onPickWhiteBalance?() },
                                  reset: { [weak self] in self?.resetWhiteBalance() })
         saturationRow.onEditBegan = { [weak self] in self?.onEditBegan?() }
         saturationRow.onEditEnded = { [weak self] in self?.onEditEnded?() }
@@ -444,6 +447,9 @@ final class GradePanel: SidePanel {
 
     /// The count is on the button, so you know whether there is anything to do
     /// before you press it rather than after.
+    /// Lit while the picker is waiting for a click on the picture.
+    func setPickingWhiteBalance(_ on: Bool) { wbHeader.isPicking = on }
+
     func setEditedCount(_ n: Int) {
         bulkButton.isEnabled = n > 0
         bulkButton.title = n > 0 ? "Export All Edited (\(n))…" : "Export All Edited…"

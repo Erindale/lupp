@@ -88,6 +88,10 @@ final class FloatImage {
     /// carries values brighter than diffuse white and the histogram must not clamp.
     let maxComponent: Float
 
+    /// What the file says about itself, read on the loading thread. Empty for
+    /// images Lupp made rather than opened.
+    let metadata: [ImageMetadata.Section]
+
     /// Measured once, at load, on the thread that did the decoding. These
     /// describe the file and never change, so recomputing them on every visit
     /// would be work done to reach the same answer.
@@ -109,7 +113,8 @@ final class FloatImage {
 
     init(width: Int, height: Int, storage: PixelStore,
          url: URL, typeIdentifier: String, sourceBitDepth: Int, sourceColorSpace: String,
-         fullWidth: Int, fullHeight: Int, wasDownsampled: Bool, maxComponent: Float) {
+         fullWidth: Int, fullHeight: Int, wasDownsampled: Bool, maxComponent: Float,
+         metadata: [ImageMetadata.Section] = []) {
         self.width = width
         self.height = height
         self.storage = storage
@@ -122,6 +127,7 @@ final class FloatImage {
         self.fullHeight = fullHeight
         self.wasDownsampled = wasDownsampled
         self.maxComponent = maxComponent
+        self.metadata = metadata
     }
 
     deinit {
