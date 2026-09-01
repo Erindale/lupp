@@ -163,7 +163,17 @@ final class CropOverlayView: NSView {
 
     /// Only claims the mouse where there is something to grab, so clicks that
     /// aren't aimed at the crop fall through to panning the image underneath.
+    ///
+    /// The hidden check has to be made here. AppKit's own `hitTest` returns nil
+    /// for a hidden view, but overriding it replaces that behaviour rather than
+    /// adding to it — so without this the overlay went on claiming every click
+    /// inside the crop rect while switched off and invisible. Since the crop
+    /// defaults to the whole frame, that was every click on the picture, and
+    /// left-drag panning simply stopped existing. Middle-drag still worked,
+    /// because an unhandled `otherMouseDown` walks up to the canvas anyway,
+    /// which made it look as though panning had moved to the middle button.
     override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden else { return nil }
         let p = convert(point, from: superview)
         return grip(at: p) == nil ? nil : self
     }

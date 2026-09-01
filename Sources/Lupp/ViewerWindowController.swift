@@ -10,7 +10,39 @@ import UniformTypeIdentifiers
 /// shortcut, with nothing on screen to say why. Handling it at the window means
 /// one rule for every click, rather than each view remembering to be polite.
 final class ViewerWindow: NSWindow {
+    /// Where a backdrop drag started, and what the level was when it did.
+    ///
+    /// Handled at the window because the gesture is about the whole interface,
+    /// not about the picture — judging an image against the wrong surround is a
+    /// real problem, and having to find the canvas first would be a silly
+    /// condition to put on fixing it. Right-drag over a panel, the footer or the
+    /// image and it behaves the same.
+    private var backdropDrag: (y: CGFloat, level: CGFloat)?
+
+    /// True while a drag is in progress, so the readout can show the value.
+    var isAdjustingBackdrop: Bool { backdropDrag != nil }
+
+    /// Told when the backdrop moves, so the chrome can be repainted.
+    var onBackdropChange: (() -> Void)?
+
     override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .rightMouseDown:
+            backdropDrag = (event.locationInWindow.y, Theme.backgroundSRGB)
+        case .rightMouseDragged:
+            if let start = backdropDrag {
+                // Up is lighter. 300pt of travel covers the whole usable range,
+                // which is enough to be precise without needing the whole screen.
+                Theme.backgroundSRGB = start.level + (event.locationInWindow.y - start.y) / 300
+                onBackdropChange?()
+                return          // the panels' own controls must not also see this
+            }
+        case .rightMouseUp:
+            if backdropDrag != nil { backdropDrag = nil; return }
+        default:
+            break
+        }
+
         if event.type == .leftMouseDown,
            let editor = firstResponder as? NSText,
            let content = contentView {
@@ -135,6 +167,13 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         // Where the keyboard goes when nothing else has claimed it — after a
         // field is finished with, and at the start.
         window.initialFirstResponder = canvas
+        window.onBackdropChange = { [weak self] in
+            guard let self else { return }
+            self.applyBackgroundEverywhere()
+            // The footer reports the level while the drag is happening, so the
+            // gesture isn't blind.
+            self.canvasReadoutChanged(self.canvas)
+        }
         wireScopesPanel()
 
         // Restores the last size and position. Only the very first window ever
@@ -739,7 +778,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         readout.update(pixel: c.cursorPixel, value: c.cursorValue,
                        zoomPercent: c.zoomPercent, exposureEV: c.exposureEV,
                        downsampled: c.isDownsampledView,
-                       backdrop: c.isAdjustingBackground ? Theme.backgroundSRGB : nil)
+                       backdrop: (window as? ViewerWindow)?.isAdjustingBackdrop == true
+                           ? Theme.backgroundSRGB : nil)
     }
 
     func canvasDisplayChanged(_ c: ImageCanvasView) {
@@ -747,13 +787,6 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         // Every change to how the image is rendered invalidates the scopes, so
         // there is one hook rather than a call beside each control.
         recomputeScopes()
-    }
-
-    /// The backdrop is one colour for the whole window, so a change to it has to
-    /// reach the chrome as well as the canvas.
-    func canvasDidChangeBackground(_ c: ImageCanvasView) {
-        applyBackgroundEverywhere()
-        canvasReadoutChanged(c)
     }
 
     /// One backdrop for the whole window: the chrome, both panels, the footer and

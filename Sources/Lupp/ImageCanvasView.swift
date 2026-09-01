@@ -7,7 +7,6 @@ protocol ImageCanvasDelegate: AnyObject {
     func canvasDisplayChanged(_ canvas: ImageCanvasView)
     func canvasWantsNavigation(_ canvas: ImageCanvasView, by delta: Int)
     func canvas(_ canvas: ImageCanvasView, wantsToOpen urls: [URL])
-    func canvasDidChangeBackground(_ canvas: ImageCanvasView)
 }
 
 /// The image surface: zoom, pan, and the eyedropper.
@@ -396,31 +395,6 @@ final class ImageCanvasView: MTKView {
     }
 
     override func mouseUp(with e: NSEvent) { endPan() }
-
-    // Right-drag sets the backdrop. Right-click has no menu here to compete with,
-    // and judging an image against the wrong surround is a real problem — a bright
-    // one makes a dark frame look washed out — so it deserves a gesture rather
-    // than a trip to a preferences pane.
-    private var backgroundDragStart: (y: CGFloat, level: CGFloat)?
-
-    override func rightMouseDown(with e: NSEvent) {
-        backgroundDragStart = (e.locationInWindow.y, Theme.backgroundSRGB)
-    }
-
-    override func rightMouseDragged(with e: NSEvent) {
-        guard let start = backgroundDragStart else { return }
-        // Up is lighter. 300pt of travel covers the whole usable range, which is
-        // enough to be precise without needing the whole screen.
-        let delta = (e.locationInWindow.y - start.y) / 300
-        Theme.backgroundSRGB = start.level + delta
-        applyBackground()
-        canvasDelegate?.canvasDidChangeBackground(self)
-    }
-
-    override func rightMouseUp(with e: NSEvent) { backgroundDragStart = nil }
-
-    /// True while the backdrop is being dragged, so the readout can show its value.
-    var isAdjustingBackground: Bool { backgroundDragStart != nil }
 
     /// Nothing to repaint here any more — the surround belongs to the window's
     /// background layer, which the controller updates with the rest of the chrome.
