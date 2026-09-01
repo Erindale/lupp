@@ -34,6 +34,7 @@ enum Selftest {
         cubeLUTParses(in: dir)
         sessionRoundTrips(in: dir)
         gpuPathIsExact(in: dir)
+        pickerReportsUnclamped(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -927,6 +928,40 @@ enum Selftest {
         check("DNG alone is not mistaken for RAW coverage",
               ext("com.adobe.raw-image") == "dng",
               detail: "com.adobe.raw-image now maps to \(ext("com.adobe.raw-image") ?? "nothing")")
+    }
+
+    /// The picker measures, so it must not be fitted to a screen.
+    ///
+    /// It renders through the display shader to stay honest about the grade, and
+    /// that shader clamps — which quietly turned every highlight into 1.0 and
+    /// lost the one thing an HDR file is opened to check.
+    private static func pickerReportsUnclamped(in dir: URL) {
+        let url = dir.appendingPathComponent("picker.exr")
+        guard writeFloat([4.0, 0.5, 0.25, 1], width: 1, height: 1, to: url,
+                         type: "com.ilm.openexr-image"),
+              let img = try? ImageLoader.load(url: url),
+              let renderer = Renderer(pixelFormat: .rgba16Float) else {
+            return fail("picker", "could not build an EXR fixture")
+        }
+        renderer.upload(img)
+
+        var d = Renderer.DisplayState()
+        d.viewTransform = .standard
+        guard let v = renderer.gradedPixel(x: 0, y: 0, display: d) else {
+            return fail("picker", "no value came back")
+        }
+        check("the picker reports a highlight above white as it is",
+              near(v.x, 4.0, tol: 0.05),
+              detail: String(format: "got %.3f, want 4.0", v.x))
+        check("and is still exact below white", near(v.y, 0.5, tol: 0.01),
+              detail: String(format: "got %.3f, want 0.5", v.y))
+
+        // It follows the grade — that is why it renders rather than sampling.
+        d.exposureEV = -2
+        if let dark = renderer.gradedPixel(x: 0, y: 0, display: d) {
+            check("the picker follows the grade", near(dark.x, 1.0, tol: 0.03),
+                  detail: String(format: "4.0 at -2EV gave %.3f, want 1.0", dark.x))
+        }
     }
 
     private static func firstStack(in view: NSView) -> NSStackView? {

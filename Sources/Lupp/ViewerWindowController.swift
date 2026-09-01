@@ -319,6 +319,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             self?.canvas.display.falseColour = on
         }
         grade.onExport = { [weak self] in self?.exportImage(nil) }
+        grade.onEditBegan = { [weak self] in self?.beginEdit() }
+        grade.onEditEnded = { [weak self] in self?.endEdit() }
         grade.onLoadLUT = { [weak self] in self?.loadLUT() }
         grade.onClearLUT = { [weak self] in self?.turnLUTOff() }
         grade.onLUTAmount = { [weak self] a in
@@ -625,6 +627,74 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         }
     }
 
+    private let undo = UndoManager()
+
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
+
+    // MARK: - Undo
+
+    /// The grade as it was before the edit in progress.
+    ///
+    /// Taken once when an edit starts and compared once when it ends, so a
+    /// slider drag — which reports a new value every few pixels — is a single
+    /// undoable step back to where the drag began, rather than a walk back
+    /// through the middle of a movement you made in one go.
+    private var editSnapshot: Preset?
+
+    /// Crop is deliberately absent, which is why `Preset` is the unit here and
+    /// `Session` is not: a preset carries the whole grade and no crop, so
+    /// excluding the crop from undo costs nothing and cannot be forgotten.
+    private func currentGrade() -> Preset {
+        var p = Preset.from(canvas.display, lutPath: currentLUTPath)
+        p.name = ""
+        return p
+    }
+
+    private func beginEdit() {
+        // Nested begins collapse: the outermost one owns the step. A section
+        // reset moves several controls, and that is still one edit.
+        if editSnapshot == nil { editSnapshot = currentGrade() }
+    }
+
+    private func endEdit() {
+        guard let before = editSnapshot else { return }
+        editSnapshot = nil
+        guard before != currentGrade() else { return }   // nothing happened
+        registerUndo(restoring: before)
+    }
+
+    private func registerUndo(restoring before: Preset) {
+        undo.registerUndo(withTarget: self) { target in
+            // Redo is the same operation pointed the other way, so registering
+            // from inside the undo is what makes the stack work in both
+            // directions: the state we are leaving becomes the next step back.
+            let redoTo = target.currentGrade()
+            target.apply(grade: before)
+            target.registerUndo(restoring: redoTo)
+        }
+        undo.setActionName("Grade Change")
+    }
+
+    /// Put a snapshot back without disturbing anything it does not describe —
+    /// the crop, the zoom, or which image is open.
+    private func apply(grade p: Preset) {
+        var d = canvas.display
+        p.apply(to: &d)
+        canvas.display = d
+        if let path = p.lutPath, FileManager.default.fileExists(atPath: path) {
+            applyLUT(at: URL(fileURLWithPath: path), announceFailure: false)
+        } else {
+            canvas.clearLUT()
+            currentLUTPath = nil
+        }
+        rememberGrade()
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshLibrary()
+            self?.syncPanelControls()
+        }
+        recomputeScopes()
+    }
+
     // MARK: - Loading
 
     func open(url: URL) {
@@ -760,6 +830,10 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         canvas.cropAspect = nil
         currentLUTPath = nil
         currentPresetName = nil
+        // A new picture is a new history. Undoing back into the grade you had
+        // on the previous file would put someone else's photograph on screen.
+        undo.removeAllActions()
+        editSnapshot = nil
 
         refreshLibrary()
         syncPanelControls()
@@ -792,7 +866,6 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     func canvasReadoutChanged(_ c: ImageCanvasView) {
         readout.update(pixel: c.cursorPixel, value: c.cursorValue,
-                       sourceValue: c.cursorSourceValue,
                        zoomPercent: c.zoomPercent, exposureEV: c.exposureEV,
                        downsampled: c.isDownsampledView,
                        backdrop: (window as? ViewerWindow)?.isAdjustingBackdrop == true

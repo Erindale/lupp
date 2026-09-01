@@ -30,6 +30,10 @@ final class GradePanel: SidePanel {
     var onCropReset: (() -> Void)?
     var onCropApply: ((Bool) -> Void)?
     var onLUTInput: ((LUTInput) -> Void)?
+    /// The bounds of one undoable edit. A slider brackets its whole drag; every
+    /// other control is a single change and brackets itself.
+    var onEditBegan: (() -> Void)?
+    var onEditEnded: (() -> Void)?
 
     private let lutPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let lutButtons = NSSegmentedControl(labels: ["Add…", "Remove"],
@@ -106,6 +110,8 @@ final class GradePanel: SidePanel {
         style(lutSlider)
         lutSlider.target = self
         lutSlider.action = #selector(lutAmountChanged(_:))
+        lutSlider.onEditBegan = { [weak self] in self?.onEditBegan?() }
+        lutSlider.onEditEnded = { [weak self] in self?.onEditEnded?() }
         lutSlider.isEnabled = false
         lutLabel.lineBreakMode = .byTruncatingMiddle
 
@@ -113,12 +119,16 @@ final class GradePanel: SidePanel {
         let balanceRows = wbRows
         for r in lightRows + balanceRows {
             r.onChange = { [weak self] in self?.lightChanged() }
+            r.onEditBegan = { [weak self] in self?.onEditBegan?() }
+            r.onEditEnded = { [weak self] in self?.onEditEnded?() }
         }
         let tetraRowViews = buildTetraRows()
         tetraAmount.minValue = 0; tetraAmount.maxValue = 100; tetraAmount.doubleValue = 100
         style(tetraAmount)
         tetraAmount.target = self
         tetraAmount.action = #selector(tetraChanged(_:))
+        tetraAmount.onEditBegan = { [weak self] in self?.onEditBegan?() }
+        tetraAmount.onEditEnded = { [weak self] in self?.onEditEnded?() }
         savePresetButton.bezelStyle = .rounded
         savePresetButton.controlSize = .small
         savePresetButton.font = .systemFont(ofSize: 11)
@@ -147,12 +157,14 @@ final class GradePanel: SidePanel {
 
         lightHeader = sectionHeader("Light", info: lightInfo,
                                     toggle: { [weak self] on in
-                                        self?.emit { self?.onBypass?(.light, on) } },
+                                        self?.discrete { self?.onBypass?(.light, on) } },
                                     reset: { [weak self] in self?.resetLight() })
         wbHeader = sectionHeader("White balance",
                                  toggle: { [weak self] on in
-                                     self?.emit { self?.onBypass?(.whiteBalance, on) } },
+                                     self?.discrete { self?.onBypass?(.whiteBalance, on) } },
                                  reset: { [weak self] in self?.resetWhiteBalance() })
+        saturationRow.onEditBegan = { [weak self] in self?.onEditBegan?() }
+        saturationRow.onEditEnded = { [weak self] in self?.onEditEnded?() }
         saturationRow.onChange = { [weak self] in
             guard let self else { return }
             self.emit { self.onSaturation?(self.saturationRow.value) }
@@ -160,13 +172,13 @@ final class GradePanel: SidePanel {
         saturationHeader = sectionHeader("Saturation",
                                          info: "How much colour survives, taken after the cube warp — so pulling it to zero renders the luma of whatever the corners just did, and the six hue corners become a channel mixer for black and white.",
                                          toggle: { [weak self] on in
-                                             self?.emit { self?.onBypass?(.saturation, on) } },
+                                             self?.discrete { self?.onBypass?(.saturation, on) } },
                                          reset: { [weak self] in
                                              self?.saturationRow.resetToDefault()
-                                             self?.emit { self?.onSaturation?(1) } })
+                                             self?.discrete { self?.onSaturation?(1) } })
         tetraHeader = sectionHeader("Tetrahedral", info: tetraInfo,
                                     toggle: { [weak self] on in
-                                        self?.emit { self?.onBypass?(.tetra, on) } },
+                                        self?.discrete { self?.onBypass?(.tetra, on) } },
                                     reset: { [weak self] in self?.resetTetra() })
         cropHeader = sectionHeader("Crop", info: cropInfo,
                                    toggle: { [weak self] on in
@@ -184,12 +196,12 @@ final class GradePanel: SidePanel {
 
         lutHeader = sectionHeader("LUT", info: lutInfo,
                                   toggle: { [weak self] on in
-                                      self?.emit { self?.onBypass?(.lut, on) } },
-                                  reset: { [weak self] in self?.emit { self?.onClearLUT?() } })
+                                      self?.discrete { self?.onBypass?(.lut, on) } },
+                                  reset: { [weak self] in self?.discrete { self?.onClearLUT?() } })
 
         masterHeader = sectionHeader("Grading",
                                      toggle: { [weak self] on in
-                                         self?.emit { self?.onBypass?(.master, on) } },
+                                         self?.discrete { self?.onBypass?(.master, on) } },
                                      size: 12,
                                      reset: { [weak self] in self?.resetEverything() })
 
@@ -256,6 +268,8 @@ final class GradePanel: SidePanel {
                                          component: pi,
                                          initial: TetraLayout.identity[ci][pi])
                 row.onChange = { [weak self] in self?.tetraChanged(nil) }
+                row.onEditBegan = { [weak self] in self?.onEditBegan?() }
+                row.onEditEnded = { [weak self] in self?.onEditEnded?() }
                 tetraRows.append(row)
                 views.append(row)
             }
@@ -294,7 +308,16 @@ final class GradePanel: SidePanel {
     /// dialled and can dial again; a crop is a composition you judged by eye,
     /// and throwing it away is not something a small reset arrow should be able
     /// to do by surprise. It keeps its own reset.
+    /// A control whose change is complete the moment it happens.
+    private func discrete(_ body: () -> Void) {
+        onEditBegan?()
+        emit(body)
+        onEditEnded?()
+    }
+
     private func resetEverything() {
+        onEditBegan?()
+        defer { onEditEnded?() }
         for row in lightAndBalanceRows { row.resetToDefault() }
         saturationRow.resetToDefault()
         for row in tetraRows { row.resetToDefault() }
@@ -323,6 +346,8 @@ final class GradePanel: SidePanel {
     }
 
     private func resetLight() {
+        onEditBegan?()
+        defer { onEditEnded?() }
         for row in [blackRow, whiteRow, exposureRow, contrastRow, pivotRow] {
             row.resetToDefault()
         }
@@ -330,11 +355,15 @@ final class GradePanel: SidePanel {
     }
 
     private func resetWhiteBalance() {
+        onEditBegan?()
+        defer { onEditEnded?() }
         for row in wbRows { row.resetToDefault() }
         lightChanged()
     }
 
     private func resetTetra() {
+        onEditBegan?()
+        defer { onEditEnded?() }
         for row in tetraRows { row.resetToDefault() }
         tetraAmount.doubleValue = 100
         tetraChanged(nil)
@@ -344,7 +373,7 @@ final class GradePanel: SidePanel {
 
     @objc private func lutPicked(_ sender: NSPopUpButton) {
         let path = sender.selectedItem?.representedObject as? String
-        emit { onPickLUT?(sender.indexOfSelectedItem > 0 ? path : nil) }
+        discrete { onPickLUT?(sender.indexOfSelectedItem > 0 ? path : nil) }
     }
 
     @objc private func lutButtonPressed(_ sender: NSSegmentedControl) {
@@ -358,7 +387,7 @@ final class GradePanel: SidePanel {
 
     @objc private func lutInputChanged(_ sender: NSPopUpButton) {
         guard let i = LUTInput(rawValue: sender.selectedTag()) else { return }
-        emit { onLUTInput?(i) }
+        discrete { onLUTInput?(i) }
     }
 
     @objc private func lutAmountChanged(_ sender: NSSlider) {
@@ -367,6 +396,10 @@ final class GradePanel: SidePanel {
 
     @objc private func presetButtonPressed(_ sender: NSSegmentedControl) {
         let name = presetPopup.titleOfSelectedItem ?? ""
+        // Delete only touches the library, so it is bracketed with the rest and
+        // simply produces no change for undo to record.
+        onEditBegan?()
+        defer { onEditEnded?() }
         emit {
             switch sender.selectedSegment {
             case 0: if !name.isEmpty { onUsePreset?(name) }

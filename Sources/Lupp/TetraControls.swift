@@ -12,6 +12,14 @@ class LabelledSliderRow: NSView {
     private let slider = FineSlider()
     private let field = NSTextField()
     var onChange: (() -> Void)?
+    /// Passed through to the slider so one drag is one undoable edit. The typed
+    /// field is a single change already, so it brackets itself.
+    var onEditBegan: (() -> Void)? {
+        get { slider.onEditBegan } set { slider.onEditBegan = newValue }
+    }
+    var onEditEnded: (() -> Void)? {
+        get { slider.onEditEnded } set { slider.onEditEnded = newValue }
+    }
 
     /// Default span for the tetra corners.
     static let span: Double = 1.0

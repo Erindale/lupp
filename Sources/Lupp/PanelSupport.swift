@@ -349,8 +349,20 @@ enum ThemeRefresh {
 final class FineSlider: NSSlider {
     static let fineFactor = 0.1
 
+    /// Bracket the whole drag, because a drag is one edit.
+    ///
+    /// The slider is continuous, so it reports a value every few pixels. Undo
+    /// registered per report would step back through the middle of a movement
+    /// you made in one go; registered on mouse-up against the value from before
+    /// mouse-down, it returns you to where you started, which is what you meant
+    /// by "undo that".
+    var onEditBegan: (() -> Void)?
+    var onEditEnded: (() -> Void)?
+
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
+        onEditBegan?()
+        defer { onEditEnded?() }
         let knobWidth = (cell as? NSSliderCell)?
             .knobRect(flipped: isFlipped).width ?? 12
         let travel = max(bounds.width - knobWidth, 1)

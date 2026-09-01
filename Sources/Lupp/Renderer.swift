@@ -385,7 +385,8 @@ final class Renderer {
     /// that is three chances for one of them to drift out of step with the
     /// screen — which has already happened once, with the uniforms.
     private func offscreen(width w: Int, height h: Int, uv: SIMD4<Float>,
-                           display: DisplayState, filter: MTLSamplerState) -> [UInt16]? {
+                           display: DisplayState, filter: MTLSamplerState,
+                           encodeOutput: UInt32 = 1) -> [UInt16]? {
         guard let source = texture, w > 0, h > 0 else { return nil }
 
         let desc = MTLTextureDescriptor.texture2DDescriptor(
@@ -407,7 +408,8 @@ final class Renderer {
               let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return nil }
 
         var u = uniforms(for: display, rect: SIMD4<Float>(-1, -1, 1, 1),
-                         checkerSize: 1, showChecker: 0, encodeOutput: 1, uvRect: uv)
+                         checkerSize: 1, showChecker: 0, encodeOutput: encodeOutput,
+                         uvRect: uv)
         var tetra = display.tetra
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
@@ -470,8 +472,9 @@ final class Renderer {
     /// the moment you touched a slider. Rendering one pixel costs a draw call and
     /// cannot drift from the canvas, which sampling the source always could.
     ///
-    /// Display-encoded, 0…1 — this is the value that reaches the screen, so the
-    /// numbers and the swatch and the hex are all the same thing.
+    /// Linear and unclamped: a highlight the screen shows as white still reads
+    /// as the value it actually is. The swatch and hex are derived from it, so
+    /// they still agree with what you can see.
     func gradedPixel(x: Int, y: Int, display: DisplayState) -> SIMD4<Float>? {
         guard let source = texture,
               x >= 0, y >= 0, x < source.width, y < source.height else { return nil }
@@ -482,8 +485,8 @@ final class Renderer {
         // Nearest, so the one texel is read rather than blended with its
         // neighbours — an eyedropper that interpolates is reporting a colour
         // that is not in the file.
-        guard let half = offscreen(width: 1, height: 1, uv: uv,
-                                   display: display, filter: nearest),
+        guard let half = offscreen(width: 1, height: 1, uv: uv, display: display,
+                                   filter: nearest, encodeOutput: 2),
               half.count >= 4 else { return nil }
         return SIMD4<Float>(Float(Float16(bitPattern: half[0])),
                             Float(Float16(bitPattern: half[1])),
@@ -718,6 +721,14 @@ final class Renderer {
         c = clamp(c, 0.0, 1.0);
         return select(c * 12.92, 1.055 * pow(c, 1.0 / 2.4) - 0.055, c > 0.0031308);
     }
+    // The same curve continued past both ends instead of clipped at them, for
+    // the readout — which is asking what the value *is*, not what a screen can
+    // show of it.
+    float3 linearToSrgbExtended(float3 c) {
+        float3 a = abs(c);
+        float3 e = select(a * 12.92, 1.055 * pow(a, 1.0 / 2.4) - 0.055, a > 0.0031308);
+        return sign(c) * e;
+    }
 
     // AgX, following the widely used analytic approximation of Blender's default
     // view transform. Close to AgX Base, but an approximation, not the LUTs.
@@ -879,6 +890,15 @@ final class Renderer {
         } else {
             enc = clamp(linearToSrgb(applyView(rgb, u.viewTransform)), 0.0, 1.0);
         }
+        // What the view transform produced before it was fitted to a screen.
+        // Only the readout uses it, and only when nothing downstream has taken
+        // over — the cube warp, saturation and a .cube are all defined on the
+        // unit cube, so once any of them runs there is no out-of-range value
+        // left to report.
+        float3 unclamped = linearToSrgbExtended(applyView(rgb, u.viewTransform));
+        bool displayOps = (u.tetraEnabled != 0u && u.tetraAmount > 0.0)
+            || u.saturation != 1.0
+            || (u.lutEnabled != 0u && u.lutAmount > 0.0);
 
         if (u.tetraEnabled != 0u && u.tetraAmount > 0.0) {
             enc = clamp(mix(enc, tetraInterp(enc, tetra), u.tetraAmount), 0.0, 1.0);
@@ -903,7 +923,7 @@ final class Renderer {
         if (u.lutEnabled != 0u && u.lutInput == 0u && u.lutAmount > 0.0) {
             enc = mix(enc, lut.sample(lutSmp, lutCoord(enc, u)).rgb, u.lutAmount);
         }
-        rgb = srgbToLinear(enc);
+        rgb = srgbToLinear((u.encodeOutput == 2u && !displayOps) ? unclamped : enc);
 
         if (u.falseColour != 0u) {
             rgb = srgbToLinear(falseColourOf(srcLuma));
@@ -917,6 +937,11 @@ final class Renderer {
         // blending and values above 1.0 survive to the EDR drawable untouched.
         // Export keeps alpha and encodes here; the screen composites over the
         // checker and leaves the encode to CoreAnimation.
+        // The readout: linear, unclamped, and not composited over anything —
+        // it is a measurement, not a picture.
+        if (u.encodeOutput == 2u) {
+            return float4(rgb, alpha);
+        }
         if (u.encodeOutput != 0u) {
             return float4(linearToSrgb(rgb), alpha);
         }

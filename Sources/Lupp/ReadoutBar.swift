@@ -89,7 +89,6 @@ final class ReadoutBar: NSView {
     }
 
     func update(pixel: (x: Int, y: Int)?, value: SIMD4<Float>?,
-                sourceValue: SIMD4<Float>? = nil,
                 zoomPercent: Double, exposureEV: Float, downsampled: Bool,
                 backdrop: CGFloat? = nil) {
         if let backdrop {
@@ -101,24 +100,21 @@ final class ReadoutBar: NSView {
             return
         }
         if let p = pixel, let v = value {
-            // Already display-encoded by the shader, so these are the numbers on
-            // the screen and the hex is the same value written another way.
+            // Linear and unclamped from the shader, so the hex and the swatch
+            // encode it — those describe what a screen can show of the value,
+            // while the numbers describe the value.
             let hex = String(format: "#%02X%02X%02X",
-                             Int((min(max(v.x, 0), 1) * 255).rounded()),
-                             Int((min(max(v.y, 0), 1) * 255).rounded()),
-                             Int((min(max(v.z, 0), 1) * 255).rounded()))
+                             Int((linearToSRGB(v.x) * 255).rounded()),
+                             Int((linearToSRGB(v.y) * 255).rounded()),
+                             Int((linearToSRGB(v.z) * 255).rounded()))
             var s = String(format: "%d, %d    %.4f  %.4f  %.4f    %@",
                            p.x, p.y, v.x, v.y, v.z, hex)
             if v.w < 0.999 { s += String(format: "    A %.3f", v.w) }
-            // From the file, not the render: the render is clamped to the screen,
-            // so it cannot tell you the pixel was brighter than white underneath.
-            if let src = sourceValue, max(src.x, max(src.y, src.z)) > 1.0001 {
-                s += "    ▲ HDR"
-            }
+            if max(v.x, max(v.y, v.z)) > 1.0001 { s += "    ▲ HDR" }
             left.stringValue = s
-            swatch.color = NSColor(red: CGFloat(min(max(v.x, 0), 1)),
-                                   green: CGFloat(min(max(v.y, 0), 1)),
-                                   blue: CGFloat(min(max(v.z, 0), 1)), alpha: 1)
+            swatch.color = NSColor(red: CGFloat(linearToSRGB(v.x)),
+                                   green: CGFloat(linearToSRGB(v.y)),
+                                   blue: CGFloat(linearToSRGB(v.z)), alpha: 1)
         } else {
             left.stringValue = "—"
             swatch.color = nil

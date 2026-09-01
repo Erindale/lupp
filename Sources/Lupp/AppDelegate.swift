@@ -263,6 +263,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(appItem)
 
         let fileItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")),
+                                    keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        let editItem = NSMenuItem()
+        editItem.submenu = editMenu
+
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
         let openSess = fileMenu.addItem(withTitle: "Open Session…",
@@ -282,6 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         fileItem.submenu = fileMenu
         main.addItem(fileItem)
+        main.addItem(editItem)
 
         let viewItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
