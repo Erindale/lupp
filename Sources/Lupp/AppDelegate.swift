@@ -9,12 +9,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Offered by "Make Lupp the Default…". Deliberately not all 62 readable
     /// types: macOS prompts once per type, so this is the set worth the clicks.
-    private static let defaultableTypes: [String] = [
+    static let commonTypes: [String] = [
         "public.jpeg", "public.png", "public.tiff", "com.compuserve.gif",
         "com.microsoft.bmp", "public.heic", "public.heif", "org.webmproject.webp",
         "public.avif", "public.jpeg-xl", "com.ilm.openexr-image", "public.radiance",
-        "com.adobe.photoshop-image", "com.adobe.raw-image",
+        "com.adobe.photoshop-image",
     ]
+
+    /// Every camera RAW type this machine can actually decode, asked of ImageIO
+    /// rather than listed by hand.
+    ///
+    /// The hand-written list had `com.adobe.raw-image` in it and looked like it
+    /// covered RAW. It does not — that identifier is DNG alone, so an ARW off a
+    /// Sony body kept opening in whatever else claimed it. Vendors also ship more
+    /// than one identifier apiece (Olympus has three), which is exactly the kind
+    /// of list that goes stale the moment a new body appears.
+    static var rawTypes: [String] {
+        (CGImageSourceCopyTypeIdentifiers() as? [String] ?? [])
+            .filter { UTType($0)?.conforms(to: .rawImage) == true }
+            .sorted()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -145,6 +159,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func makeDefaultViewer(_ sender: Any?) {
+        claimDefault(for: AppDelegate.commonTypes + AppDelegate.rawTypes,
+                     called: "image and camera RAW")
+    }
+
+    /// RAW on its own, because it is the set most likely to be claimed by
+    /// something else and the one worth re-running after installing an editor
+    /// that grabbed it back.
+    @objc func makeDefaultRawViewer(_ sender: Any?) {
+        claimDefault(for: AppDelegate.rawTypes, called: "camera RAW")
+    }
+
+    private func claimDefault(for identifiers: [String], called what: String) {
         let bundleURL = Bundle.main.bundleURL
         guard bundleURL.pathExtension == "app" else {
             alert("Lupp has to be running from Lupp.app",
@@ -157,9 +183,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let types = AppDelegate.defaultableTypes.compactMap { UTType($0) }
+        let types = identifiers.compactMap { UTType($0) }
         let a = NSAlert()
-        a.messageText = "Make Lupp the default for \(types.count) image types?"
+        a.messageText = "Make Lupp the default for \(types.count) \(what) types?"
         a.informativeText = "macOS asks for confirmation once per file type, so expect \(types.count) prompts in a row. You can stop at any point — whatever you’ve confirmed so far sticks."
         a.addButton(withTitle: "Continue")
         a.addButton(withTitle: "Cancel")
@@ -225,6 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "About Lupp", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Make Lupp the Default Image Viewer…", action: #selector(makeDefaultViewer(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Make Lupp the Default for Camera RAW…", action: #selector(makeDefaultRawViewer(_:)), keyEquivalent: "")
         appMenu.addItem(withTitle: "Formats Lupp Can Read…", action: #selector(showReadableTypes(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Lupp", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")

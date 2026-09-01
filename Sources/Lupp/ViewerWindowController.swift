@@ -792,6 +792,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     func canvasReadoutChanged(_ c: ImageCanvasView) {
         readout.update(pixel: c.cursorPixel, value: c.cursorValue,
+                       sourceValue: c.cursorSourceValue,
                        zoomPercent: c.zoomPercent, exposureEV: c.exposureEV,
                        downsampled: c.isDownsampledView,
                        backdrop: (window as? ViewerWindow)?.isAdjustingBackdrop == true

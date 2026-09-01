@@ -56,6 +56,10 @@ final class ImageCanvasView: MTKView {
 
     private(set) var cursorPixel: (x: Int, y: Int)?
     private(set) var cursorValue: SIMD4<Float>?
+    /// The same pixel as it sits in the file. Only the highlight warning uses it:
+    /// the graded readout is clamped to what a screen can show, so without this
+    /// there is nothing left to say a file carries values above white.
+    private(set) var cursorSourceValue: SIMD4<Float>?
 
     /// Shown when there is no picture. Without it an empty window is a grey
     /// rectangle with no indication that it is waiting for something, and the
@@ -253,6 +257,7 @@ final class ImageCanvasView: MTKView {
         emptyState.isHidden = img != nil
         cursorPixel = nil
         cursorValue = nil
+        cursorSourceValue = nil
         exposureEV = 0
         needsDisplay = true
         canvasDelegate?.canvasReadoutChanged(self)
@@ -271,6 +276,7 @@ final class ImageCanvasView: MTKView {
         applyInitialFitIfNeeded()
         cursorPixel = nil
         cursorValue = nil
+        cursorSourceValue = nil
         needsDisplay = true
         canvasDelegate?.canvasReadoutChanged(self)
     }
@@ -440,6 +446,7 @@ final class ImageCanvasView: MTKView {
     override func mouseExited(with e: NSEvent) {
         cursorPixel = nil
         cursorValue = nil
+        cursorSourceValue = nil
         canvasDelegate?.canvasReadoutChanged(self)
     }
 
@@ -509,12 +516,17 @@ final class ImageCanvasView: MTKView {
         // should say where the pixel is in the file, not in the current view of it.
         let o = cropOrigin
         let x = Int(floor(ip.x)) + o.x, y = Int(floor(ip.y)) + o.y
-        if let v = img.sample(x: x, y: y) {
+        // Sampled from the render, not the file: the readout has to describe the
+        // pixel you are looking at, grade and all.
+        if let src = img.sample(x: x, y: y),
+           let v = renderer?.gradedPixel(x: x, y: y, display: display) {
             cursorPixel = (x, y)
             cursorValue = v
+            cursorSourceValue = src
         } else {
             cursorPixel = nil
             cursorValue = nil
+            cursorSourceValue = nil
         }
         canvasDelegate?.canvasReadoutChanged(self)
     }

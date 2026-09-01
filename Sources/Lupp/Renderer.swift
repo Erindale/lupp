@@ -461,6 +461,36 @@ final class Renderer {
         return Renderer.cgImage(fromHalf: half, width: c.w, height: c.h, bitDepth: bitDepth)
     }
 
+    /// The finished pixel at one source coordinate, through the same shader that
+    /// drew it.
+    ///
+    /// The readout used to sample the decoded file, which meant it answered a
+    /// question nobody was asking: it reported the pixel as it arrived rather
+    /// than as you are looking at it, so every number disagreed with the screen
+    /// the moment you touched a slider. Rendering one pixel costs a draw call and
+    /// cannot drift from the canvas, which sampling the source always could.
+    ///
+    /// Display-encoded, 0…1 — this is the value that reaches the screen, so the
+    /// numbers and the swatch and the hex are all the same thing.
+    func gradedPixel(x: Int, y: Int, display: DisplayState) -> SIMD4<Float>? {
+        guard let source = texture,
+              x >= 0, y >= 0, x < source.width, y < source.height else { return nil }
+        let uv = SIMD4<Float>(Float(x) / Float(source.width),
+                              Float(y) / Float(source.height),
+                              Float(x + 1) / Float(source.width),
+                              Float(y + 1) / Float(source.height))
+        // Nearest, so the one texel is read rather than blended with its
+        // neighbours — an eyedropper that interpolates is reporting a colour
+        // that is not in the file.
+        guard let half = offscreen(width: 1, height: 1, uv: uv,
+                                   display: display, filter: nearest),
+              half.count >= 4 else { return nil }
+        return SIMD4<Float>(Float(Float16(bitPattern: half[0])),
+                            Float(Float16(bitPattern: half[1])),
+                            Float(Float16(bitPattern: half[2])),
+                            Float(Float16(bitPattern: half[3])))
+    }
+
     /// Render the graded image small, for the scopes to measure.
     ///
     /// Scopes have to describe what is on screen, not the file — a histogram that

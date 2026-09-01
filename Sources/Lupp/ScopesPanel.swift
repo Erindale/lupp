@@ -28,7 +28,11 @@ final class ScopesPanel: SidePanel {
 
     private let transformPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private lazy var transformNote = caption()
-    private lazy var note = caption("Scopes read sRGB-encoded values; the CIE plot uses linear.")
+    /// Hung on the scopes themselves rather than printed under them: it answers
+    /// a question you only ask while looking at one, and the rest of the time it
+    /// is a paragraph in the way.
+    private static let encodingNote =
+        "Scopes read sRGB-encoded values; the CIE plot uses linear."
 
     /// Held so switching waveform mode is instant — all three rasters exist.
     private var current: Scopes?
@@ -63,14 +67,18 @@ final class ScopesPanel: SidePanel {
 
         stats.lineBreakMode = .byWordWrapping
         stats.maximumNumberOfLines = 0
+        for v in [histogram, parade, vectorscope, cie] as [NSView] {
+            v.toolTip = ScopesPanel.encodingNote
+        }
+        stats.toolTip = ScopesPanel.encodingNote
 
         install(column: [channelControl, overlayControl,
                          histogram, parade, vectorscope, cie,
                          stats,
                          separator(), sectionLabel("View transform"),
-                         transformPopup, transformNote, note],
+                         transformPopup, transformNote],
                 fullWidth: [channelControl, overlayControl, histogram, parade,
-                            vectorscope, cie, stats, transformPopup, transformNote, note])
+                            vectorscope, cie, stats, transformPopup, transformNote])
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }

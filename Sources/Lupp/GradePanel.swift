@@ -138,13 +138,14 @@ final class GradePanel: SidePanel {
         exportButton.action = #selector(exportPressed(_:))
         exportButton.translatesAutoresizingMaskIntoConstraints = false
 
-        let tetraNote = caption("Moves the six hue corners of the RGB cube. Black, white and the greys between them are fixed, so neutrals stay neutral.")
-        let lutNote = caption("A display LUT is the last thing applied — the look laid over a finished grade, so it will put colour back into anything saturation took out. Choosing a log input instead means the LUT is the display rendering: it gets log-encoded scene values and its output is taken as final, so it stands in for the view transform rather than tone-mapping twice, and necessarily happens earlier in the chain.")
-        let exportNote = caption("Writes the image as shown — transform, LUT, grade and exposure baked in, at full resolution.")
+        let cropInfo = ("Drag the rectangle on the image; hold Shift for a tenth-speed drag with a magnifier. Applied makes the crop the working image — zoom, scopes and readout all follow it — without touching the source, so switching back to Overlay costs nothing. Export writes the crop at its own pixel size either way.")
+        let tetraInfo = ("Moves the six hue corners of the RGB cube. Black, white and the greys between them are fixed, so neutrals stay neutral.")
+        let lutInfo = ("A display LUT is the last thing applied — the look laid over a finished grade, so it will put colour back into anything saturation took out. Choosing a log input instead means the LUT is the display rendering: it gets log-encoded scene values and its output is taken as final, so it stands in for the view transform rather than tone-mapping twice, and necessarily happens earlier in the chain.")
+        let exportInfo = ("Writes the image as shown — transform, LUT, grade and exposure baked in, at full resolution.")
 
-        let lightNote = caption("Linear, before the view transform — these behave like light, not like edits to a finished picture. Black and white point set what counts as black and white first; contrast pivots on 0.18 scene grey.")
+        let lightInfo = ("Linear, before the view transform — these behave like light, not like edits to a finished picture. Black and white point set what counts as black and white first; contrast pivots on 0.18 scene grey.")
 
-        lightHeader = sectionHeader("Light",
+        lightHeader = sectionHeader("Light", info: lightInfo,
                                     toggle: { [weak self] on in
                                         self?.emit { self?.onBypass?(.light, on) } },
                                     reset: { [weak self] in self?.resetLight() })
@@ -157,16 +158,17 @@ final class GradePanel: SidePanel {
             self.emit { self.onSaturation?(self.saturationRow.value) }
         }
         saturationHeader = sectionHeader("Saturation",
+                                         info: "How much colour survives, taken after the cube warp — so pulling it to zero renders the luma of whatever the corners just did, and the six hue corners become a channel mixer for black and white.",
                                          toggle: { [weak self] on in
                                              self?.emit { self?.onBypass?(.saturation, on) } },
                                          reset: { [weak self] in
                                              self?.saturationRow.resetToDefault()
                                              self?.emit { self?.onSaturation?(1) } })
-        tetraHeader = sectionHeader("Tetrahedral",
+        tetraHeader = sectionHeader("Tetrahedral", info: tetraInfo,
                                     toggle: { [weak self] on in
                                         self?.emit { self?.onBypass?(.tetra, on) } },
                                     reset: { [weak self] in self?.resetTetra() })
-        cropHeader = sectionHeader("Crop",
+        cropHeader = sectionHeader("Crop", info: cropInfo,
                                    toggle: { [weak self] on in
                                        self?.emit { self?.onBypass?(.crop, on) } },
                                    reset: { [weak self] in self?.emit { self?.onCropReset?() } })
@@ -180,7 +182,7 @@ final class GradePanel: SidePanel {
         cropApply.target = self
         cropApply.action = #selector(cropApplyChanged(_:))
 
-        lutHeader = sectionHeader("LUT",
+        lutHeader = sectionHeader("LUT", info: lutInfo,
                                   toggle: { [weak self] on in
                                       self?.emit { self?.onBypass?(.lut, on) } },
                                   reset: { [weak self] in self?.emit { self?.onClearLUT?() } })
@@ -191,21 +193,18 @@ final class GradePanel: SidePanel {
                                      size: 12,
                                      reset: { [weak self] in self?.resetEverything() })
 
-        let cropNote = caption("Drag the rectangle on the image; hold Shift for a tenth-speed drag with a magnifier. Applied makes the crop the working image — zoom, scopes and readout all follow it — without touching the source, so switching back to Overlay costs nothing. Export writes the crop at its own pixel size either way.")
 
         var column: [NSView] = [
             masterHeader,
             separator(),
             lightHeader, blackRow, whiteRow, exposureRow, contrastRow, pivotRow,
             wbHeader, wbRows[0], wbRows[1], wbRows[2],
-            lightNote,
             separator(),
             tetraHeader,
         ]
         column += tetraRowViews
-        column += [caption("Mix"), tetraAmount, tetraNote]
-        column += [separator(), saturationHeader, saturationRow,
-                   caption("How much colour survives, taken after the cube warp — so pulling it to zero renders the luma of whatever the corners just did, and the six hue corners become a channel mixer for black and white.")]
+        column += [caption("Mix"), tetraAmount]
+        column += [separator(), saturationHeader, saturationRow]
 
         // Order down the panel is the order the pixels travel: light, then the
         // cube warp, then saturation, then a display LUT last of all.
@@ -214,13 +213,13 @@ final class GradePanel: SidePanel {
         // export — which is the thing it most affects, since export writes the
         // crop at its own pixel size.
         column += [separator(),
-                   lutHeader, lutPopup, lutButtons, lutLabel, lutInput, lutSlider, lutNote,
+                   lutHeader, lutPopup, lutButtons, lutLabel, lutInput, lutSlider,
                    separator(),
                    sectionLabel("Presets"), presetPopup, presetButtons, savePresetButton,
                    separator(),
-                   cropHeader, cropAspect, cropApply, cropSize, cropNote,
+                   cropHeader, cropAspect, cropApply, cropSize,
                    separator(),
-                   sectionLabel("Export"), exportButton, exportNote]
+                   sectionLabel("Export", info: exportInfo), exportButton]
 
         sectionViews[.light] = [blackRow, whiteRow, exposureRow, contrastRow, pivotRow]
         sectionViews[.whiteBalance] = wbRows
@@ -231,11 +230,11 @@ final class GradePanel: SidePanel {
 
         // Built in named pieces: one literal mixing this many control types is
         // more than the type checker will do in reasonable time.
-        var wide: [NSView] = [lutPopup, lutButtons, lutLabel, lutInput, lutSlider, lutNote]
-        wide += [tetraAmount, tetraNote, lightNote, savePresetButton, saturationRow] as [NSView]
-        wide += [presetPopup, presetButtons, exportButton, exportNote] as [NSView]
+        var wide: [NSView] = [lutPopup, lutButtons, lutLabel, lutInput, lutSlider]
+        wide += [tetraAmount, savePresetButton, saturationRow] as [NSView]
+        wide += [presetPopup, presetButtons, exportButton] as [NSView]
         wide += [masterHeader, lightHeader, wbHeader, tetraHeader, saturationHeader, lutHeader] as [NSView]
-        wide += [cropHeader, cropAspect, cropApply, cropSize, cropNote] as [NSView]
+        wide += [cropHeader, cropAspect, cropApply, cropSize] as [NSView]
         wide += tetraRowViews
         wide += lightRows as [NSView]
         wide += balanceRows as [NSView]

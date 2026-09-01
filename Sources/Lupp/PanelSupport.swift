@@ -107,10 +107,11 @@ class SidePanel: NSView {
 
     // MARK: - Control styling
 
-    func sectionLabel(_ t: String) -> NSTextField {
+    func sectionLabel(_ t: String, info: String? = nil) -> NSTextField {
         let f = NSTextField(labelWithString: t.uppercased())
         f.font = .systemFont(ofSize: 9, weight: .semibold)
         f.textColor = .tertiaryLabelColor
+        f.toolTip = info
         return f
     }
 
@@ -120,10 +121,14 @@ class SidePanel: NSView {
     /// Per section rather than one blanket control, because comparing one change
     /// at a time is the whole point — and undoing a white balance experiment
     /// shouldn't cost you the cube warp you were happy with.
-    func sectionHeader(_ t: String, toggle: ((Bool) -> Void)? = nil,
-                       size: CGFloat = 9,
+    /// `info` becomes the title's tooltip rather than a paragraph under the
+    /// controls. The explanation is worth having the first few times and is
+    /// clutter every time after that, so it hides where you'd go looking for it.
+    func sectionHeader(_ t: String, info: String? = nil,
+                       toggle: ((Bool) -> Void)? = nil, size: CGFloat = 9,
                        reset: @escaping () -> Void) -> SectionHeader {
-        SectionHeader(title: t.uppercased(), toggle: toggle, reset: reset, size: size)
+        SectionHeader(title: t.uppercased(), toggle: toggle, reset: reset,
+                      size: size, info: info)
     }
 
     func caption(_ t: String = "") -> NSTextField {
@@ -195,7 +200,7 @@ final class SectionHeader: NSView {
     }
 
     init(title: String, toggle: ((Bool) -> Void)?, reset: @escaping () -> Void,
-         size: CGFloat = 9) {
+         size: CGFloat = 9, info: String? = nil) {
         // The panel's own title sits a little larger than the sections under it.
         label = ThemedLabel(title, role: size > 9 ? .secondary : .tertiary,
                             size: size, weight: .semibold)
@@ -203,6 +208,10 @@ final class SectionHeader: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         toggleHandler = toggle
+        // On the label as well: it covers most of the header, and a tooltip set
+        // only on the container never fires where you actually point.
+        toolTip = info
+        label.toolTip = info
 
         let resetButton = ActionButton(action: reset)
         resetButton.image = NSImage(systemSymbolName: "arrow.counterclockwise",

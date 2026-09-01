@@ -28,6 +28,7 @@ enum Selftest {
         viewportAnchorHolds()
         gradePanelReadsInPipelineOrder()
         masterResetCoversEverySection()
+        defaultHandlerCoversCameraRaw()
         openingZoomRules(in: dir)
         scopesReadDisplayEncoded(in: dir)
         cubeLUTParses(in: dir)
@@ -904,6 +905,28 @@ enum Selftest {
             if let b = resetButton(named: section, in: sub) { return b }
         }
         return nil
+    }
+
+    /// "Make Lupp the Default" has to actually cover RAW.
+    ///
+    /// It previously looked as though it did — the list carried
+    /// `com.adobe.raw-image`, which reads like the RAW entry and is in fact DNG
+    /// alone. So an ARW went on opening in whatever else had claimed it, and the
+    /// menu item gave no sign of having missed anything.
+    private static func defaultHandlerCoversCameraRaw() {
+        let raw = AppDelegate.rawTypes
+        let offered = Set(AppDelegate.commonTypes + raw)
+        let ext = { (id: String) in UTType(id)?.preferredFilenameExtension?.lowercased() }
+
+        check("the default-handler set covers camera RAW", raw.count > 10,
+              detail: "only \(raw.count) RAW types found")
+        check("ARW is among them", offered.contains { ext($0) == "arw" },
+              detail: "no type with an .arw extension")
+        // The identifier that used to stand in for all of RAW, to keep the
+        // distinction visible: it is DNG, and DNG is not ARW.
+        check("DNG alone is not mistaken for RAW coverage",
+              ext("com.adobe.raw-image") == "dng",
+              detail: "com.adobe.raw-image now maps to \(ext("com.adobe.raw-image") ?? "nothing")")
     }
 
     private static func firstStack(in view: NSView) -> NSStackView? {
