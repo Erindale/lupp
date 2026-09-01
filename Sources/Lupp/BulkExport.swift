@@ -121,16 +121,21 @@ final class BulkExportSheet: NSObject {
     private var destination: URL?
     private let count: Int
     private let sample: URL?
-    private var onRun: ((BulkExport.Options) -> Void)?
+    private var onRun: ((BulkExport.Options, Bool) -> Void)?
+    private let alreadyExported: Int
+    private lazy var againCheck = NSButton(
+        checkboxWithTitle: "Also re-export the \(alreadyExported) already written",
+        target: nil, action: nil)
 
-    init(count: Int, sample: URL?) {
+    init(count: Int, alreadyExported: Int = 0, sample: URL?) {
         self.count = count
+        self.alreadyExported = alreadyExported
         self.sample = sample
         super.init()
     }
 
     /// Ask, then hand back what was chosen. Nil if cancelled.
-    func present(over host: NSWindow, run: @escaping (BulkExport.Options) -> Void) {
+    func present(over host: NSWindow, run: @escaping (BulkExport.Options, Bool) -> Void) {
         onRun = run
         panel.title = "Export \(count) edited image\(count == 1 ? "" : "s")"
 
@@ -188,10 +193,12 @@ final class BulkExportSheet: NSObject {
         buttons.orientation = .horizontal
         buttons.spacing = 10
 
-        let column = NSStackView(views: [
-            row("Suffix", suffixField), row("Format", formatPopup),
-            row("Location", dest), row("", example), progress, status, buttons,
-        ])
+        var rows: [NSView] = [row("Suffix", suffixField), row("Format", formatPopup),
+                              row("Location", dest), row("", example)]
+        // Only offered when there is something finished to re-export.
+        if alreadyExported > 0 { rows.append(row("", againCheck)) }
+        rows += [progress, status, buttons]
+        let column = NSStackView(views: rows)
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 12
@@ -256,7 +263,8 @@ final class BulkExportSheet: NSObject {
         formatPopup.isEnabled = false
         progress.isHidden = false
         onRun?(BulkExport.Options(suffix: suffixField.stringValue,
-                                  format: chosenFormat, destination: destination))
+                                  format: chosenFormat, destination: destination),
+               againCheck.state == .on)
     }
 
     func report(done: Int, of total: Int) {

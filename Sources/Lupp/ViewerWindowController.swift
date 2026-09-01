@@ -577,7 +577,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     private func syncPanelControls() {
-        grade.setEditedCount(allEdits().count)
+        grade.setEditedCount(unsavedEditsMap().count)
         scopes.show(display: canvas.display,
                     detected: canvas.image.map(ViewTransform.detected(for:)),
                     sceneLinear: currentIsSceneLinear)
@@ -704,11 +704,17 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     // MARK: - Unsaved work
 
-    /// Images whose current state has never reached disk.
+    /// Images whose current state has never reached disk, with the work itself.
+    ///
+    /// This, rather than every image you have touched, is what "still to do"
+    /// means: an image exported and then left alone is finished, and offering to
+    /// write it again is offering to redo work and overwrite a file for no gain.
+    func unsavedEditsMap() -> [URL: Session] {
+        allEdits().filter { url, session in committed[url] != session }
+    }
+
     func unsavedEdits() -> [URL] {
-        allEdits().compactMap { url, session in
-            committed[url] == session ? nil : url
-        }.sorted { $0.path < $1.path }
+        unsavedEditsMap().keys.sorted { $0.path < $1.path }
     }
 
     /// Noted when work reaches disk, so it stops counting as unsaved.
@@ -848,19 +854,31 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     private func bulkExport() {
-        let jobs = allEdits()
-        guard !jobs.isEmpty, let window else {
+        // Only what has not been written. Exporting everything again each time
+        // would redo the work and, since nothing is ever overwritten, report a
+        // pile of skipped files for its trouble.
+        let outstanding = unsavedEditsMap()
+        let done = allEdits().count - outstanding.count
+        guard !outstanding.isEmpty, let window else {
             let a = NSAlert()
-            a.messageText = "Nothing has been edited yet"
-            a.informativeText = "Grade an image or two first — this writes out every picture in this window that you have changed, each in its own state."
+            a.messageText = done > 0
+                ? "Everything edited has already been exported"
+                : "Nothing has been edited yet"
+            a.informativeText = done > 0
+                ? "All \(done) edited image\(done == 1 ? " has" : "s have") been written out since it was last changed. Adjust something and it will show up here again."
+                : "Grade an image or two first — this writes out every picture in this window that you have changed, each in its own state."
             a.runModal()
             return
         }
-        let sheet = BulkExportSheet(count: jobs.count,
+        let jobs = outstanding
+        let sheet = BulkExportSheet(count: jobs.count, alreadyExported: done,
                                     sample: jobs.keys.sorted { $0.path < $1.path }.first)
         bulkSheet = sheet
-        sheet.present(over: window) { [weak self, weak sheet] options in
-            BulkExport.run(edits: jobs, options: options,
+        sheet.present(over: window) { [weak self, weak sheet] options, includeDone in
+            // Re-exporting the finished ones is a deliberate opt-in, for when the
+            // format or the destination is what changed rather than the grade.
+            let batch = includeDone ? (self?.allEdits() ?? jobs) : jobs
+            BulkExport.run(edits: batch, options: options,
                            progress: { done, total in sheet?.report(done: done, of: total) },
                            finished: { outcome in
                                sheet?.close()
@@ -868,12 +886,15 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
                                // Only what actually landed: a file skipped for
                                // already existing was not written, so the work
                                // it stands for is still unsaved.
-                               for (url, session) in jobs
+                               for (url, session) in batch
                                where outcome.written.contains(
                                    BulkExport.destination(for: url, options: options)) {
                                    self?.markCommitted(url, session)
                                }
                                self?.reportBulk(outcome)
+                               // The button counts what is left, so it has to be
+                               // told that some of it no longer is.
+                               self?.syncPanelControls()
                            })
         }
     }
