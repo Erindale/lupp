@@ -57,6 +57,12 @@ final class ImageCanvasView: MTKView {
     private(set) var cursorPixel: (x: Int, y: Int)?
     private(set) var cursorValue: SIMD4<Float>?
 
+    /// Shown when there is no picture. Without it an empty window is a grey
+    /// rectangle with no indication that it is waiting for something, and the
+    /// only way in is a menu you have to know to look at.
+    private let emptyState = NSStackView()
+    private let loadButton = NSButton(title: "Load Image…", target: nil, action: nil)
+
     private var spaceHeld = false
     private var panning = false
     private var trackingAreaRef: NSTrackingArea?
@@ -77,7 +83,9 @@ final class ImageCanvasView: MTKView {
     /// Scale at which one image pixel covers exactly one physical display pixel.
     private var oneToOne: CGFloat { 1 / max(window?.backingScaleFactor ?? 1, 1) }
 
-    var zoomPercent: Double { Double(viewport.scale / oneToOne) * 100 }
+    /// Zero when there is nothing open, so the footer can say nothing rather
+    /// than quote a magnification for an image that isn't there.
+    var zoomPercent: Double { image == nil ? 0 : Double(viewport.scale / oneToOne) * 100 }
     var isDownsampledView: Bool { image?.wasDownsampled ?? false }
 
     init() {
@@ -122,6 +130,27 @@ final class ImageCanvasView: MTKView {
         cropOverlay.isHidden = true
         cropOverlay.translatesAutoresizingMaskIntoConstraints = false
         addSubview(cropOverlay)
+
+        // The action travels the responder chain to the app delegate, the same
+        // one File ▸ Open uses, so there is one way of opening a file rather
+        // than two that can drift apart.
+        loadButton.bezelStyle = .rounded
+        loadButton.controlSize = .large
+        loadButton.action = #selector(AppDelegate.openDocument(_:))
+        emptyState.orientation = .vertical
+        emptyState.alignment = .centerX
+        emptyState.spacing = Theme.scaled(10)
+        emptyState.addArrangedSubview(loadButton)
+        // Dropping already works; saying so costs a line and saves a discovery.
+        emptyState.addArrangedSubview(ThemedLabel("or drop one here", role: .tertiary,
+                                                  size: 11))
+        emptyState.translatesAutoresizingMaskIntoConstraints = false
+        emptyState.isHidden = true
+        addSubview(emptyState)
+        NSLayoutConstraint.activate([
+            emptyState.centerXAnchor.constraint(equalTo: centerXAnchor),
+            emptyState.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
         NSLayoutConstraint.activate([
             cropOverlay.topAnchor.constraint(equalTo: topAnchor),
             cropOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -221,6 +250,7 @@ final class ImageCanvasView: MTKView {
         } else {
             renderer?.discard()
         }
+        emptyState.isHidden = img != nil
         cursorPixel = nil
         cursorValue = nil
         exposureEV = 0
@@ -399,6 +429,7 @@ final class ImageCanvasView: MTKView {
     /// Nothing to repaint here any more — the surround belongs to the window's
     /// background layer, which the controller updates with the rest of the chrome.
     func applyBackground() {
+        ThemeRefresh.apply(to: emptyState)
         needsDisplay = true
     }
 

@@ -117,7 +117,7 @@ final class ReadoutBar: NSView {
             swatch.color = nil
         }
 
-        var r = String(format: "%.0f%%", zoomPercent)
+        var r = zoomPercent > 0 ? String(format: "%.0f%%", zoomPercent) : ""
         if exposureEV != 0 { r += String(format: "    EV %+.2f", exposureEV) }
         if downsampled { r += "    reduced" }
         right.stringValue = r

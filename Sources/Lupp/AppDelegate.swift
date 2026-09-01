@@ -32,12 +32,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Finder hands us the file just after launch; only fall back to an open
-        // panel if nothing arrived.
+        // Finder hands us the file just after launch, so wait a turn before
+        // deciding nothing arrived. Opened on its own, Lupp shows an empty
+        // window rather than an open panel: a file chooser in front of an app
+        // you have not seen yet is a demand, not a welcome.
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.openedAtLaunch, self.controllers.isEmpty else { return }
-            self.openDocument(nil)
+            self.presentEmptyWindow()
         }
+    }
+
+    /// An empty window, for launching with no file and for the Dock icon being
+    /// clicked when nothing is open.
+    func presentEmptyWindow() {
+        let c = ViewerWindowController()
+        controllers.append(c)
+        c.showWindow(nil)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -56,6 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         present(url)
     }
 
+    /// Closing the last window quits. That also means Lupp never sits running
+    /// with nothing open, which is why there is no Dock-reopen hook: there is no
+    /// state it could fire in.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     /// The window a new one should avoid landing exactly on top of — they all
@@ -63,6 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var frontmostViewerFrame: NSRect? { controllers.last?.window?.frame }
 
     func present(_ url: URL) {
+        // An empty window is a window waiting for exactly this, so fill it rather
+        // than leaving it sitting next to the one you asked for.
+        if let empty = controllers.first(where: { $0.hasNoImage }) {
+            empty.showWindow(nil)
+            if Session.isSession(url) { empty.open(session: url) } else { empty.open(url: url) }
+            return
+        }
         // A session names an image; opening one is opening that image with the
         // work restored, so it goes through the same door.
         if Session.isSession(url) {

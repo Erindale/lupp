@@ -120,6 +120,22 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         self.init(url: url, deferOpening: false)
     }
 
+    /// A window with nothing open in it yet.
+    ///
+    /// Launching the app on its own used to put an open panel in front of you
+    /// before you had seen the app at all. A window that says what it is waiting
+    /// for is a gentler door, and it is also the one you land on after a load
+    /// fails, so the state had to exist regardless.
+    convenience init() {
+        self.init(url: nil, deferOpening: true)
+        window?.title = "Lupp"
+        window?.subtitle = ""
+        canvas.show(nil)
+    }
+
+    /// Nothing open yet, so this window is available to be filled.
+    var hasNoImage: Bool { canvas.image == nil }
+
     /// Everything needed to build this window again: which picture, and the work
     /// standing on it. Used when the interface size changes, since the panels
     /// size themselves as they are built and there is no honest way to restretch
@@ -143,7 +159,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         open(url: image)
     }
 
-    private convenience init(url: URL, deferOpening: Bool) {
+    private convenience init(url: URL?, deferOpening: Bool) {
         let window = ViewerWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -193,7 +209,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         // Deliberately no LUT is loaded here. Opening an image shows the image;
         // a look is something you ask for, per image, from the library or a preset.
         refreshLibrary()
-        if !deferOpening { open(url: url) }
+        if let url, !deferOpening { open(url: url) }
     }
 
     private func buildContentView() {

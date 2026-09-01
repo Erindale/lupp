@@ -64,6 +64,10 @@ image — comes from a single adjustable number.*
 - **Every image opens unedited.** A grade belongs to the picture it was made for,
   so it never carries into the next file, and no LUT is ever applied unless you
   ask for one.
+- **Opens with nothing in it** if you launch it on its own — an empty window with
+  a Load Image button, rather than a file chooser in front of an app you haven't
+  seen yet. The first image you open fills that window rather than making a
+  second one.
 - **Drag an image onto the window** to open it, as well as Finder and File ▸ Open.
 - **Display controls** in the same panel — isolate R/G/B/A/Luma, a clipping
   overlay, and an ARRI-style false-colour exposure ramp.
