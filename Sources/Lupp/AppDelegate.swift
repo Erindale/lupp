@@ -282,7 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                          action: #selector(ViewerWindowController.saveSession(_:)),
                          keyEquivalent: "s")
         fileMenu.addItem(.separator())
-        let exportItem = fileMenu.addItem(withTitle: "Export as Displayed…",
+        let exportItem = fileMenu.addItem(withTitle: "Export As…",
                                           action: #selector(ViewerWindowController.exportImage(_:)),
                                           keyEquivalent: "e")
         exportItem.keyEquivalentModifierMask = [.command, .shift]

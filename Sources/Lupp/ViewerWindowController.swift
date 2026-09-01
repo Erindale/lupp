@@ -115,6 +115,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// In memory and for this window only. Nothing here is written to disk;
     /// sessions are still saved when you ask and not before.
     private var edits: [URL: Session] = [:]
+    /// Held while a batch runs, so the sheet is not released mid-export.
+    private var bulkSheet: BulkExportSheet?
 
     private var scopesOpen: Bool {
         get { Preferences.scopesPanelOpen }
@@ -199,6 +201,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         buildContentView()
         buildTitlebarAccessory()
         canvas.canvasDelegate = self
+        canvas.onOpenRecent = { [weak self] url in self?.open(url: url) }
         // Where the keyboard goes when nothing else has claimed it — after a
         // field is finished with, and at the start.
         window.initialFirstResponder = canvas
@@ -338,6 +341,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             self?.canvas.display.falseColour = on
         }
         grade.onExport = { [weak self] in self?.exportImage(nil) }
+        grade.onBulkExport = { [weak self] in self?.bulkExport() }
         grade.onEditBegan = { [weak self] in self?.beginEdit() }
         grade.onEditEnded = { [weak self] in self?.endEdit() }
         grade.onLoadLUT = { [weak self] in self?.loadLUT() }
@@ -560,6 +564,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     private func syncPanelControls() {
+        grade.setEditedCount(allEdits().count)
         scopes.show(display: canvas.display,
                     detected: canvas.image.map(ViewTransform.detected(for:)),
                     sceneLinear: currentIsSceneLinear)
@@ -684,6 +689,76 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
 
+    // MARK: - Bulk export
+
+    /// Everything edited in this window, including the picture on screen.
+    ///
+    /// The cache is written on the way *out* of an image, so the one you are
+    /// looking at is not in it yet — and it is the most likely thing you wanted
+    /// exported. Folded in here rather than by writing to the cache, so merely
+    /// opening the dialog does not record an edit.
+    private func allEdits() -> [URL: Session] {
+        var all = edits
+        if let img = canvas.image, hasEdits(canvas.display, lutPath: currentLUTPath) {
+            all[img.url] = Session.from(canvas.display, image: img.url,
+                                        lutPath: currentLUTPath, bookmark: false)
+        }
+        return all
+    }
+
+    private func bulkExport() {
+        let jobs = allEdits()
+        guard !jobs.isEmpty, let window else {
+            let a = NSAlert()
+            a.messageText = "Nothing has been edited yet"
+            a.informativeText = "Grade an image or two first — this writes out every picture in this window that you have changed, each in its own state."
+            a.runModal()
+            return
+        }
+        let sheet = BulkExportSheet(count: jobs.count,
+                                    sample: jobs.keys.sorted { $0.path < $1.path }.first)
+        bulkSheet = sheet
+        sheet.present(over: window) { [weak self, weak sheet] options in
+            BulkExport.run(edits: jobs, options: options,
+                           progress: { done, total in sheet?.report(done: done, of: total) },
+                           finished: { outcome in
+                               sheet?.close()
+                               self?.bulkSheet = nil
+                               self?.reportBulk(outcome)
+                           })
+        }
+    }
+
+    private func reportBulk(_ o: BulkExport.Outcome) {
+        let a = NSAlert()
+        a.messageText = o.failed.isEmpty && o.skipped.isEmpty
+            ? "Exported \(o.written.count) image\(o.written.count == 1 ? "" : "s")"
+            : "Exported \(o.written.count), with \(o.skipped.count + o.failed.count) left alone"
+        var lines: [String] = []
+        if !o.skipped.isEmpty {
+            // Never silently: a file that already existed is the one case where
+            // doing nothing is right and saying nothing is not.
+            lines.append("Already existed, so nothing was overwritten:")
+            lines += o.skipped.prefix(5).map { "  " + $0.lastPathComponent }
+            if o.skipped.count > 5 { lines.append("  …and \(o.skipped.count - 5) more") }
+        }
+        if !o.failed.isEmpty {
+            lines.append("Failed:")
+            lines += o.failed.prefix(5).map { "  \($0.0.lastPathComponent) — \($0.1)" }
+            if o.failed.count > 5 { lines.append("  …and \(o.failed.count - 5) more") }
+        }
+        a.informativeText = lines.joined(separator: "\n")
+        if let first = o.written.first {
+            a.addButton(withTitle: "OK")
+            a.addButton(withTitle: "Show in Finder")
+            if a.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.activateFileViewerSelecting([first])
+            }
+            return
+        }
+        a.runModal()
+    }
+
     // MARK: - Per-image edits
 
     /// Whether anything has actually been done to the picture on screen.
@@ -786,6 +861,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     // MARK: - Loading
 
     func open(url: URL) {
+        Preferences.remember(url)
         siblings = FolderScanner.siblings(of: url)
         index = siblings.firstIndex(of: url) ?? 0
         loadCurrent()
@@ -1193,6 +1269,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Where you actually got to, not only where you came in. Arrowing to
+        // frame 50 and closing should offer frame 50 next time.
+        if let img = canvas.image { Preferences.remember(img.url) }
         AppDelegate.shared?.forget(self)
     }
 }
