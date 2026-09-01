@@ -65,9 +65,14 @@ image — comes from a single adjustable number.*
   so it never carries into the next file, and no LUT is ever applied unless you
   ask for one.
 - **Opens with nothing in it** if you launch it on its own — an empty window with
-  a Load Image button, rather than a file chooser in front of an app you haven't
-  seen yet. The first image you open fills that window rather than making a
-  second one.
+  a Load Image button and the last five images you opened, by name and folder,
+  rather than a file chooser in front of an app you haven't seen yet. The first
+  image you open fills that window rather than making a second one.
+- **Each image keeps its own edits** while a window is open, so scrolling a
+  folder shows your grades rather than one grade imposed on everything, and two
+  frames graded differently can be compared by arrowing between them. Undo is
+  per-image too. Nothing is written to disk — sessions are still saved only when
+  you ask.
 - **Drag an image onto the window** to open it, as well as Finder and File ▸ Open.
 - **Display controls** in the same panel — isolate R/G/B/A/Luma, a clipping
   overlay, and an ARRI-style false-colour exposure ramp.
@@ -190,12 +195,30 @@ starting point you can carry on adjusting rather than an opaque state. Window si
 were looking at an image, not what you did to it. *Apply Last* puts back the
 grade you were most recently working in.
 
-**Export as Displayed…** (⇧⌘E) writes the image at full resolution with the view
+**Export As…** (⇧⌘E) writes the image at full resolution with the view
 transform, LUT, grade and exposure baked in. It renders through the *same shader*
 as the screen, so an export is what you were looking at rather than a second
 implementation that can drift. **PNG**, **JPEG** (quality 0.95) and **TIFF** —
 8-bit for PNG and JPEG, 16-bit for TIFF, where the extra depth is the reason to
 pick it.
+
+**Export Grade as LUT…** bakes the whole colour chain into a `.cube` — view
+transform, light, cube warp, saturation and any LUT already loaded — at 17³, 33³
+or 65³, written to a folder, added to Lupp's own library, or both. It is rendered
+through the same shader as the canvas rather than the chain being reimplemented,
+because a LUT written by a second implementation would be a second opinion about
+your grade. Input and output are display-encoded sRGB; the crop isn't included,
+since a cube maps colours and has no geometry, and a scene-linear source carries
+values above white that a 0–1 cube has nowhere to put. The dialog says which of
+those apply before you write anything.
+
+**Export All Edited…** writes out every image you have graded in this window in
+one pass, each in its own state, as `name_suffix.ext` — the suffix, the format
+and the destination are yours to choose, and the dialog shows you a real
+filename before you commit. It is the other half of per-image editing: run a
+folder applying presets and quick grades, then write the lot at the end without
+visiting any of them twice. A file that already exists is never overwritten; it
+is skipped and named in the report.
 
 ## LUTs
 
@@ -404,6 +427,15 @@ kilobytes of numbers, and nothing is ever written back to your source. Both the
 path and a file-system bookmark are stored: the path is what you can read and fix
 in a text editor, the bookmark is what still finds the file after it has been
 moved or renamed.
+
+**Closing a window with unsaved grades asks first.** Not because anything is at
+risk in the file — the source is never touched — but because the work standing on
+it would go. "Unsaved" means *changed since it was last written*: an image you
+exported and then left alone doesn't count, and one you tweaked afterwards does.
+Lupp writes nothing unless asked, so a warning that fired on every edited window
+would be a dialog you learn to dismiss without reading. The alert offers to run
+the batch export there and then, since that is usually the answer. ⌘Q asks too —
+a warning the faster route walks around isn't one.
 
 **A session is only ever written when you ask for one.** There is no autosave and
 no periodic write; open an image, grade it, close it, and nothing is left behind.

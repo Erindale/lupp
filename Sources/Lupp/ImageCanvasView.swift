@@ -62,6 +62,12 @@ final class ImageCanvasView: MTKView {
     /// only way in is a menu you have to know to look at.
     private let emptyState = NSStackView()
     private let loadButton = NSButton(title: "Load Image…", target: nil, action: nil)
+    /// Names and paths only — see `Preferences.recentImages` for why there are no
+    /// thumbnails.
+    private let recents = NSStackView()
+    private var recentPaths: [ObjectIdentifier: URL] = [:]
+    /// Told which file was picked, since opening one is the controller's job.
+    var onOpenRecent: ((URL) -> Void)?
 
     private var spaceHeld = false
     private var panning = false
@@ -142,8 +148,14 @@ final class ImageCanvasView: MTKView {
         emptyState.spacing = Theme.scaled(10)
         emptyState.addArrangedSubview(loadButton)
         // Dropping already works; saying so costs a line and saves a discovery.
-        emptyState.addArrangedSubview(ThemedLabel("or drop one here", role: .tertiary,
-                                                  size: 11))
+        let dropHint = ThemedLabel("or drop one here", role: .tertiary, size: 11)
+        emptyState.addArrangedSubview(dropHint)
+        recents.orientation = .vertical
+        recents.alignment = .centerX
+        recents.spacing = Theme.scaled(2)
+        emptyState.addArrangedSubview(recents)
+        // Set the recents apart from the invitation above them.
+        emptyState.setCustomSpacing(Theme.scaled(24), after: dropHint)
         emptyState.translatesAutoresizingMaskIntoConstraints = false
         emptyState.isHidden = true
         addSubview(emptyState)
@@ -251,6 +263,7 @@ final class ImageCanvasView: MTKView {
             renderer?.discard()
         }
         emptyState.isHidden = img != nil
+        if img == nil { rebuildRecents() }
         cursorPixel = nil
         cursorValue = nil
         exposureEV = 0
@@ -428,7 +441,43 @@ final class ImageCanvasView: MTKView {
 
     /// Nothing to repaint here any more — the surround belongs to the window's
     /// background layer, which the controller updates with the rest of the chrome.
+    /// The last few images you opened, so an empty window is somewhere to
+    /// continue from rather than only somewhere to start.
+    private func rebuildRecents() {
+        for v in recents.arrangedSubviews { v.removeFromSuperview() }
+        let paths = Preferences.recentImages.prefix(5)
+        guard !paths.isEmpty else { return }
+        recents.addArrangedSubview(ThemedLabel("Recent", role: .tertiary, size: 10))
+        for path in paths {
+            let url = URL(fileURLWithPath: path)
+            let b = NSButton(title: "", target: self, action: #selector(recentPicked(_:)))
+            b.bezelStyle = .inline
+            b.isBordered = false
+            b.controlSize = .small
+            // Name first at readable weight, then the folder it sits in — the
+            // path is what tells two shoots with the same filenames apart.
+            let name = NSMutableAttributedString(
+                string: url.lastPathComponent,
+                attributes: [.font: NSFont.systemFont(ofSize: Theme.scaled(11)),
+                             .foregroundColor: Theme.text(.secondary)])
+            name.append(NSAttributedString(
+                string: "   " + url.deletingLastPathComponent().path,
+                attributes: [.font: NSFont.systemFont(ofSize: Theme.scaled(9)),
+                             .foregroundColor: Theme.text(.tertiary)]))
+            b.attributedTitle = name
+            b.toolTip = path
+            recentPaths[ObjectIdentifier(b)] = url
+            recents.addArrangedSubview(b)
+        }
+    }
+
+    @objc private func recentPicked(_ sender: NSButton) {
+        guard let url = recentPaths[ObjectIdentifier(sender)] else { return }
+        onOpenRecent?(url)
+    }
+
     func applyBackground() {
+        if image == nil { rebuildRecents() }
         ThemeRefresh.apply(to: emptyState)
         needsDisplay = true
     }

@@ -97,6 +97,38 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// Held between asking for an image and it arriving, since the grade can only
     /// be applied once there is something to apply it to.
     private var pendingSession: Session?
+    /// Whether that pending work came from this window's own cache rather than
+    /// from a `.lupp` file. A saved session records how you were looking at the
+    /// image as well as what you did to it; work you are simply scrolling back
+    /// past should not reach up and change which channel you are inspecting.
+    private var pendingIsCachedEdit = false
+
+    /// Every image in this window that you have actually edited, and what you did
+    /// to it.
+    ///
+    /// Each picture keeps its own work, so scrolling a folder shows your grades
+    /// rather than one grade imposed on everything — and two frames you graded
+    /// differently can be compared by arrowing between them, which a single
+    /// carried-forward grade could never do. Copying a look onto the next image
+    /// stays a deliberate act: Apply Last, or a preset.
+    ///
+    /// In memory and for this window only. Nothing here is written to disk;
+    /// sessions are still saved when you ask and not before.
+    private var edits: [URL: Session] = [:]
+
+    /// What was last *written out* for each image — saved as a session, or
+    /// exported.
+    ///
+    /// This is what makes "unsaved" mean something. Lupp is non-destructive and
+    /// writes nothing unless asked, so almost every window has edits in it;
+    /// warning about all of them would be a dialog you learn to dismiss without
+    /// reading. Comparing against what actually reached disk means the warning
+    /// fires when work would genuinely be lost, and stays quiet when it would
+    /// not — including when you exported an image and then changed nothing.
+    private var committed: [URL: Session] = [:]
+    /// Held while a batch runs, so the sheet is not released mid-export.
+    private var bulkSheet: BulkExportSheet?
+    private var lutSheet: LUTBakeSheet?
 
     private var scopesOpen: Bool {
         get { Preferences.scopesPanelOpen }
@@ -142,7 +174,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// them in place.
     func rebuildSnapshot() -> (session: Session, image: URL)? {
         guard let img = canvas.image else { return nil }
-        return (Session.from(canvas.display, image: img.url, lutPath: currentLUTPath), img.url)
+        return (Session.from(canvas.display, image: img.url,
+                             lutPath: currentLUTPath, bookmark: false), img.url)
     }
 
     /// A window built to receive work that already exists in memory, rather than
@@ -180,6 +213,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         buildContentView()
         buildTitlebarAccessory()
         canvas.canvasDelegate = self
+        canvas.onOpenRecent = { [weak self] url in self?.open(url: url) }
         // Where the keyboard goes when nothing else has claimed it — after a
         // field is finished with, and at the start.
         window.initialFirstResponder = canvas
@@ -319,6 +353,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
             self?.canvas.display.falseColour = on
         }
         grade.onExport = { [weak self] in self?.exportImage(nil) }
+        grade.onBulkExport = { [weak self] in self?.bulkExport() }
+        grade.onExportLUT = { [weak self] in self?.exportGradeAsLUT() }
         grade.onEditBegan = { [weak self] in self?.beginEdit() }
         grade.onEditEnded = { [weak self] in self?.endEdit() }
         grade.onLoadLUT = { [weak self] in self?.loadLUT() }
@@ -541,6 +577,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     private func syncPanelControls() {
+        grade.setEditedCount(unsavedEditsMap().count)
         scopes.show(display: canvas.display,
                     detected: canvas.image.map(ViewTransform.detected(for:)),
                     sceneLinear: currentIsSceneLinear)
@@ -627,9 +664,328 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         }
     }
 
-    private let undo = UndoManager()
+    /// One history per image.
+    ///
+    /// A single window-wide manager had to be emptied on every navigation, since
+    /// undoing back into the grade you had on the previous file would put
+    /// someone else's photograph on screen. That made undo useless the moment
+    /// you looked at the next frame — and now that each picture keeps its own
+    /// edits, its own history is the matching half of the same idea.
+    ///
+    /// Kept even for an image whose edits were undone back to neutral, so the
+    /// reset that got you there is itself undoable.
+    private var undoStacks: [URL: UndoManager] = [:]
+
+    /// Far more steps than a sitting on one image plausibly takes, and still a
+    /// bound. A grade snapshot is a few hundred bytes, so this is about nothing
+    /// growing without limit rather than about size.
+    private static let undoDepth = 200
+
+    /// Used only while no image is open, so the Edit menu has something to ask.
+    /// Capped like the rest: an unbounded manager nothing much writes to is
+    /// still an unbounded manager, and it does accept edits — the colour panel
+    /// exists whether or not a picture does.
+    private lazy var noImageUndo: UndoManager = {
+        let m = UndoManager()
+        m.levelsOfUndo = ViewerWindowController.undoDepth
+        return m
+    }()
+
+    private var undo: UndoManager {
+        guard let url = canvas.image?.url else { return noImageUndo }
+        if let existing = undoStacks[url] { return existing }
+        let made = UndoManager()
+        made.levelsOfUndo = ViewerWindowController.undoDepth
+        undoStacks[url] = made
+        return made
+    }
 
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { undo }
+
+    // MARK: - Unsaved work
+
+    /// Images whose current state has never reached disk, with the work itself.
+    ///
+    /// This, rather than every image you have touched, is what "still to do"
+    /// means: an image exported and then left alone is finished, and offering to
+    /// write it again is offering to redo work and overwrite a file for no gain.
+    func unsavedEditsMap() -> [URL: Session] {
+        allEdits().filter { url, session in
+            committed[url].map(ViewerWindowController.editContent) != editContent(session)
+        }
+    }
+
+    /// A session reduced to what was actually *done* to the image.
+    ///
+    /// A Session records how you were looking at it as well as what you changed,
+    /// because a saved `.lupp` should reopen the way you left it. None of that is
+    /// work: switching to the blue channel or turning on the clipping overlay
+    /// after an export made the image count as unsaved again, which inflated
+    /// everything measured from that set — the button, the close warning, and the
+    /// "already written" number beside the re-export box, which is where it was
+    /// most visible because it went *down*.
+    static func editContent(_ s: Session) -> Session {
+        var n = s
+        n.channel = ChannelView.rgb.rawValue
+        n.showClipping = false
+        n.falseColour = false
+        return n
+    }
+
+    private func editContent(_ s: Session) -> Session {
+        ViewerWindowController.editContent(s)
+    }
+
+    func unsavedEdits() -> [URL] {
+        unsavedEditsMap().keys.sorted { $0.path < $1.path }
+    }
+
+    /// Noted when work reaches disk, so it stops counting as unsaved.
+    private func markCommitted(_ url: URL, _ session: Session) {
+        committed[url] = session
+    }
+
+    /// Asked before a window closes and before the app quits.
+    ///
+    /// Three ways out rather than two: the useful answer to "you have unsaved
+    /// grades" is usually to write them, and having to cancel, find the button
+    /// and come back is a chore the dialog can simply remove.
+    func confirmDiscardingEdits() -> Bool {
+        let unsaved = unsavedEdits()
+        guard !unsaved.isEmpty else { return true }
+
+        let a = NSAlert()
+        a.messageText = unsaved.count == 1
+            ? "One image has edits that haven’t been saved or exported"
+            : "\(unsaved.count) images have edits that haven’t been saved or exported"
+        a.informativeText = unsaved.prefix(6).map { $0.lastPathComponent }
+            .joined(separator: "\n")
+            + (unsaved.count > 6 ? "\n…and \(unsaved.count - 6) more" : "")
+            + "\n\nYour source files are untouched either way — it’s the grades that would go."
+        a.addButton(withTitle: "Export All Edited…")
+        a.addButton(withTitle: "Cancel")
+        a.addButton(withTitle: "Discard")
+        switch a.runModal() {
+        case .alertFirstButtonReturn:
+            // Stay open and put the batch dialog up; closing again afterwards
+            // will find nothing left to warn about.
+            DispatchQueue.main.async { [weak self] in self?.bulkExport() }
+            return false
+        case .alertThirdButtonReturn:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        confirmDiscardingEdits()
+    }
+
+    // MARK: - Grade as a LUT
+
+    /// The menu's way in. Same action as the panel button, so the two cannot
+    /// come to mean different things.
+    @objc func exportGradeAsLUTMenu(_ sender: Any?) { exportGradeAsLUT() }
+
+    private func exportGradeAsLUT() {
+        guard let window else { return }
+        guard hasEdits(canvas.display, lutPath: currentLUTPath) else {
+            let a = NSAlert()
+            a.messageText = "There’s no grade to write out"
+            a.informativeText = "Adjust something first — an identity LUT is a large file that does nothing."
+            a.runModal()
+            return
+        }
+        let stem = canvas.image?.url.deletingPathExtension().lastPathComponent ?? "Lupp Grade"
+        let sheet = LUTBakeSheet(
+            suggestedName: currentPresetName ?? stem,
+            caveats: LUTBake.caveats(for: canvas.display, sceneLinear: currentIsSceneLinear))
+        lutSheet = sheet
+        sheet.present(over: window) { [weak self] options in
+            self?.lutSheet = nil
+            self?.writeLUT(options)
+        }
+    }
+
+    private func writeLUT(_ options: LUTBake.Options) {
+        guard let text = LUTBake.cube(display: canvas.display,
+                                      lutPath: currentLUTPath, options: options) else {
+            let a = NSAlert()
+            a.messageText = "Couldn’t build the LUT"
+            a.informativeText = "Rendering the lattice failed."
+            a.runModal()
+            return
+        }
+        let file = options.name
+            .replacingOccurrences(of: "/", with: "-") + ".cube"
+        var written: [URL] = []
+        var failed: String?
+
+        if let folder = options.destination {
+            let out = folder.appendingPathComponent(file)
+            do { try text.write(to: out, atomically: true, encoding: .utf8); written.append(out) }
+            catch { failed = error.localizedDescription }
+        }
+        if options.addToLibrary {
+            // Via a temporary file and the library's own importer, so a baked LUT
+            // arrives by exactly the same door as one you added from disk.
+            let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(file)
+            if (try? text.write(to: tmp, atomically: true, encoding: .utf8)) != nil {
+                written.append(URL(fileURLWithPath: LUTLibrary.add(importing: tmp)))
+                try? FileManager.default.removeItem(at: tmp)
+                refreshLibrary()
+            }
+        }
+
+        let a = NSAlert()
+        if let failed {
+            a.messageText = "Couldn’t write the LUT"
+            a.informativeText = failed
+        } else {
+            a.messageText = "Wrote \(options.name).cube"
+            a.informativeText = written.map { $0.deletingLastPathComponent().path }
+                .joined(separator: "\n")
+        }
+        if let first = written.first, failed == nil {
+            a.addButton(withTitle: "OK")
+            a.addButton(withTitle: "Show in Finder")
+            if a.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.activateFileViewerSelecting([first])
+            }
+            return
+        }
+        a.runModal()
+    }
+
+    // MARK: - Bulk export
+
+    /// Everything edited in this window, including the picture on screen.
+    ///
+    /// The cache is written on the way *out* of an image, so the one you are
+    /// looking at is not in it yet — and it is the most likely thing you wanted
+    /// exported. Folded in here rather than by writing to the cache, so merely
+    /// opening the dialog does not record an edit.
+    private func allEdits() -> [URL: Session] {
+        var all = edits
+        if let img = canvas.image, hasEdits(canvas.display, lutPath: currentLUTPath) {
+            all[img.url] = Session.from(canvas.display, image: img.url,
+                                        lutPath: currentLUTPath, bookmark: false)
+        }
+        return all
+    }
+
+    private func bulkExport() {
+        // Only what has not been written. Exporting everything again each time
+        // would redo the work and, since nothing is ever overwritten, report a
+        // pile of skipped files for its trouble.
+        let outstanding = unsavedEditsMap()
+        let done = allEdits().count - outstanding.count
+        guard !outstanding.isEmpty, let window else {
+            let a = NSAlert()
+            a.messageText = done > 0
+                ? "Everything edited has already been exported"
+                : "Nothing has been edited yet"
+            a.informativeText = done > 0
+                ? "All \(done) edited image\(done == 1 ? " has" : "s have") been written out since it was last changed. Adjust something and it will show up here again."
+                : "Grade an image or two first — this writes out every picture in this window that you have changed, each in its own state."
+            a.runModal()
+            return
+        }
+        let jobs = outstanding
+        let sheet = BulkExportSheet(count: jobs.count, alreadyExported: done,
+                                    sample: jobs.keys.sorted { $0.path < $1.path }.first)
+        bulkSheet = sheet
+        sheet.present(over: window) { [weak self, weak sheet] options, includeDone in
+            // Re-exporting the finished ones is a deliberate opt-in, for when the
+            // format or the destination is what changed rather than the grade.
+            let batch = includeDone ? (self?.allEdits() ?? jobs) : jobs
+            BulkExport.run(edits: batch, options: options,
+                           progress: { done, total in sheet?.report(done: done, of: total) },
+                           finished: { outcome in
+                               sheet?.close()
+                               self?.bulkSheet = nil
+                               // Only what actually landed: a file skipped for
+                               // already existing was not written, so the work
+                               // it stands for is still unsaved.
+                               for (url, session) in batch
+                               where outcome.written.contains(
+                                   BulkExport.destination(for: url, options: options)) {
+                                   self?.markCommitted(url, session)
+                               }
+                               self?.reportBulk(outcome)
+                               // The button counts what is left, so it has to be
+                               // told that some of it no longer is.
+                               self?.syncPanelControls()
+                           })
+        }
+    }
+
+    private func reportBulk(_ o: BulkExport.Outcome) {
+        let a = NSAlert()
+        a.messageText = o.failed.isEmpty && o.skipped.isEmpty
+            ? "Exported \(o.written.count) image\(o.written.count == 1 ? "" : "s")"
+            : "Exported \(o.written.count), with \(o.skipped.count + o.failed.count) left alone"
+        var lines: [String] = []
+        if !o.skipped.isEmpty {
+            // Never silently: a file that already existed is the one case where
+            // doing nothing is right and saying nothing is not.
+            lines.append("Already existed, so nothing was overwritten:")
+            lines += o.skipped.prefix(5).map { "  " + $0.lastPathComponent }
+            if o.skipped.count > 5 { lines.append("  …and \(o.skipped.count - 5) more") }
+        }
+        if !o.failed.isEmpty {
+            lines.append("Failed:")
+            lines += o.failed.prefix(5).map { "  \($0.0.lastPathComponent) — \($0.1)" }
+            if o.failed.count > 5 { lines.append("  …and \(o.failed.count - 5) more") }
+        }
+        a.informativeText = lines.joined(separator: "\n")
+        if let first = o.written.first {
+            a.addButton(withTitle: "OK")
+            a.addButton(withTitle: "Show in Finder")
+            if a.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.activateFileViewerSelecting([first])
+            }
+            return
+        }
+        a.runModal()
+    }
+
+    // MARK: - Per-image edits
+
+    /// Whether anything has actually been done to the picture on screen.
+    ///
+    /// Compared against a neutral state built with *this* image's view transform
+    /// and LUT input, because neither is an edit: the transform is chosen from
+    /// what kind of file it is, and the input is a standing preference about how
+    /// LUTs are read. Measuring against a bare default would file every EXR as
+    /// edited the moment it opened.
+    private func hasEdits(_ d: Renderer.DisplayState, lutPath: String?) -> Bool {
+        var neutral = Renderer.DisplayState()
+        neutral.viewTransform = d.viewTransform
+        neutral.lutInput = d.lutInput
+        var mine = Preset.from(d, lutPath: lutPath); mine.name = ""
+        var none = Preset.from(neutral, lutPath: nil); none.name = ""
+        // Crop is not part of a preset, so it is asked about separately.
+        return mine != none || d.cropEnabled
+    }
+
+    /// Called on the way out of an image, while it is still the one on screen.
+    private func rememberEditsOnCurrentImage() {
+        guard let img = canvas.image else { return }
+        if hasEdits(canvas.display, lutPath: currentLUTPath) {
+            // No bookmark: this copy never leaves memory, and making one costs a
+            // filesystem round trip on every navigation.
+            edits[img.url] = Session.from(canvas.display, image: img.url,
+                                          lutPath: currentLUTPath, bookmark: false)
+        } else {
+            // Undone back to neutral: forget it, so the picture is genuinely
+            // untouched again rather than carrying an empty record of having
+            // once been edited.
+            edits.removeValue(forKey: img.url)
+        }
+    }
 
     // MARK: - Undo
 
@@ -698,6 +1054,7 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     // MARK: - Loading
 
     func open(url: URL) {
+        Preferences.remember(url)
         siblings = FolderScanner.siblings(of: url)
         index = siblings.firstIndex(of: url) ?? 0
         loadCurrent()
@@ -706,8 +1063,16 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     private func loadCurrent() {
         guard siblings.indices.contains(index) else { return }
         let url = siblings[index]
+        rememberEditsOnCurrentImage()
         loadToken += 1
         let token = loadToken
+
+        // Work you already did on this picture, put back. A saved session being
+        // opened outranks it — that is an explicit request for a particular state.
+        if pendingSession == nil, let cached = edits[url] {
+            pendingSession = cached
+            pendingIsCachedEdit = true
+        }
 
         window?.representedURL = url
         window?.title = url.lastPathComponent
@@ -786,9 +1151,15 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         canvas.show(img)
 
         if let session = pendingSession {
+            let cached = pendingIsCachedEdit
             pendingSession = nil
+            pendingIsCachedEdit = false
             var d = canvas.display
+            // How you are looking at images — which channel, the overlays — is
+            // yours and carries across, exactly as it does for an unedited one.
+            let looking = (d.channel, d.showClipping, d.falseColour)
             session.apply(to: &d)
+            if cached { (d.channel, d.showClipping, d.falseColour) = looking }
             canvas.display = d
             canvas.cropAspect = nil
             if let path = session.lutPath, FileManager.default.fileExists(atPath: path) {
@@ -830,9 +1201,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         canvas.cropAspect = nil
         currentLUTPath = nil
         currentPresetName = nil
-        // A new picture is a new history. Undoing back into the grade you had
-        // on the previous file would put someone else's photograph on screen.
-        undo.removeAllActions()
+        // No history to clear: each image has its own, and this one's is
+        // whatever it was when you last looked at it. Only the half-finished
+        // edit is dropped, since it belonged to the picture you just left.
         editSnapshot = nil
 
         refreshLibrary()
@@ -933,6 +1304,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         do {
             try session.write(to: out)
             sessionURL = out
+            markCommitted(img.url, Session.from(canvas.display, image: img.url,
+                                                lutPath: currentLUTPath, bookmark: false))
         } catch {
             let a = NSAlert()
             a.messageText = "Couldn’t save the session"
@@ -1042,6 +1415,8 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
         var props: [CFString: Any] = [:]
         if format == .jpeg { props[kCGImageDestinationLossyCompressionQuality] = 0.95 }
         CGImageDestinationAddImage(dest, cg, props as CFDictionary)
+        markCommitted(img.url, Session.from(canvas.display, image: img.url,
+                                            lutPath: currentLUTPath, bookmark: false))
         if !CGImageDestinationFinalize(dest) {
             let a = NSAlert()
             a.messageText = "Couldn’t write \(out.lastPathComponent)"
@@ -1091,6 +1466,9 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Where you actually got to, not only where you came in. Arrowing to
+        // frame 50 and closing should offer frame 50 next time.
+        if let img = canvas.image { Preferences.remember(img.url) }
         AppDelegate.shared?.forget(self)
     }
 }

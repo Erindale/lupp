@@ -12,7 +12,7 @@ import simd
 /// Both a path and a bookmark are stored. The path is what a human can read and
 /// fix in a text editor; the bookmark is what still finds the file after it has
 /// been moved or renamed.
-struct Session: Codable {
+struct Session: Codable, Equatable {
     static let fileExtension = "lupp"
     /// Sessions written before the extension was shortened still open.
     static let legacyExtensions = ["luppsession"]
@@ -61,11 +61,21 @@ struct Session: Codable {
 
     // MARK: - Making one
 
-    static func from(_ d: Renderer.DisplayState, image: URL, lutPath: String?) -> Session {
+    /// `bookmark: false` for sessions that only ever live in memory.
+    ///
+    /// A bookmark is what still finds the image after it has been moved or
+    /// renamed, which matters entirely for a `.lupp` file on disk and not at all
+    /// for the copy a window keeps while you scroll a folder — that one is found
+    /// by the path it is filed under, and the file is not going anywhere in the
+    /// meantime. Making one costs a filesystem round trip, and on a network share
+    /// that is a network round trip, paid every time you arrow away from an image
+    /// you have edited.
+    static func from(_ d: Renderer.DisplayState, image: URL, lutPath: String?,
+                     bookmark: Bool = true) -> Session {
         Session(imagePath: image.path,
-                bookmark: try? image.bookmarkData(options: .minimalBookmark,
-                                                  includingResourceValuesForKeys: nil,
-                                                  relativeTo: nil),
+                bookmark: bookmark ? try? image.bookmarkData(options: .minimalBookmark,
+                                                             includingResourceValuesForKeys: nil,
+                                                             relativeTo: nil) : nil,
                 viewTransform: d.viewTransform.rawValue,
                 exposureEV: d.exposureEV,
                 whiteBalance: [d.whiteBalance.x, d.whiteBalance.y, d.whiteBalance.z],

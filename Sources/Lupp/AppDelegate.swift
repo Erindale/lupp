@@ -80,6 +80,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         present(url)
     }
 
+    /// Quitting has to ask too, or ⌘Q is a way round the warning that closing a
+    /// window puts up — and the faster route is the one people take.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        for c in controllers where !c.unsavedEdits().isEmpty {
+            c.window?.makeKeyAndOrderFront(nil)
+            if !c.confirmDiscardingEdits() { return .terminateCancel }
+        }
+        return .terminateNow
+    }
+
     /// Closing the last window quits. That also means Lupp never sits running
     /// with nothing open, which is why there is no Dock-reopen hook: there is no
     /// state it could fire in.
@@ -282,9 +292,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                          action: #selector(ViewerWindowController.saveSession(_:)),
                          keyEquivalent: "s")
         fileMenu.addItem(.separator())
-        let exportItem = fileMenu.addItem(withTitle: "Export as Displayed…",
+        let exportItem = fileMenu.addItem(withTitle: "Export As…",
                                           action: #selector(ViewerWindowController.exportImage(_:)),
                                           keyEquivalent: "e")
+        fileMenu.addItem(withTitle: "Export Grade as LUT…",
+                         action: #selector(ViewerWindowController.exportGradeAsLUTMenu(_:)),
+                         keyEquivalent: "")
         exportItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")

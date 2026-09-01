@@ -44,6 +44,35 @@ enum Preferences {
         UserDefaults.standard.set(t.rawValue, forKey: key)
     }
 
+    /// Images you opened, most recent first.
+    ///
+    /// Paths only, and deliberately no thumbnails. A thumbnail would have to be
+    /// decoded from a file that may be on a share which is not mounted right
+    /// now, which is exactly when you would be looking at this list — a picture
+    /// of a file you cannot reach is worse than its name, because it implies the
+    /// file is there.
+    static var recentImages: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "recentImages") ?? [] }
+        set { UserDefaults.standard.set(Array(newValue.prefix(20)), forKey: "recentImages") }
+    }
+
+    /// Remembered when you open a file and again when you close the window, so
+    /// the list says where you were rather than only where you started. Arrowing
+    /// through a folder is not recorded: 183 frames of a shoot would bury the
+    /// handful of pictures you actually chose to open.
+    static func remember(_ url: URL) {
+        var list = recentImages
+        list.removeAll { $0 == url.path }
+        list.insert(url.path, at: 0)
+        recentImages = list
+    }
+
+    /// The suffix added to bulk-exported files, so the choice sticks.
+    static var exportSuffix: String {
+        get { UserDefaults.standard.string(forKey: "exportSuffix") ?? "graded" }
+        set { UserDefaults.standard.set(newValue, forKey: "exportSuffix") }
+    }
+
     /// The export format you chose last, so the panel opens on it again.
     static var lastExportExtension: String {
         get { UserDefaults.standard.string(forKey: "lastExportExtension") ?? "png" }

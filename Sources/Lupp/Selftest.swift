@@ -35,6 +35,9 @@ enum Selftest {
         sessionRoundTrips(in: dir)
         gpuPathIsExact(in: dir)
         pickerReportsUnclamped(in: dir)
+        editsRoundTripPerImage(in: dir)
+        gradeBakesToACube()
+        unsavedMeansUnwritten(in: dir)
 
         print(failures == 0 ? "\nall checks passed" : "\n\(failures) check(s) FAILED")
         return failures == 0 ? 0 : 1
@@ -962,6 +965,185 @@ enum Selftest {
             check("the picker follows the grade", near(dark.x, 1.0, tol: 0.03),
                   detail: String(format: "4.0 at -2EV gave %.3f, want 1.0", dark.x))
         }
+    }
+
+    /// Each image keeps its own work while you scroll a folder.
+    ///
+    /// The cache stores a Session per image, so what matters is that a Session
+    /// carries everything an edit consists of — including the crop, which undo
+    /// deliberately excludes and this deliberately does not — and that a picture
+    /// nobody touched is distinguishable from one that was edited back to
+    /// neutral. Get the second wrong and every image in a folder files itself as
+    /// edited the moment it opens.
+    private static func editsRoundTripPerImage(in dir: URL) {
+        var edited = Renderer.DisplayState()
+        edited.exposureEV = 1.5
+        edited.saturation = 0.25
+        edited.cropEnabled = true
+        edited.crop = SIMD4<Float>(0.1, 0.2, 0.5, 0.5)
+
+        let url = dir.appendingPathComponent("frame.png")
+        let session = Session.from(edited, image: url, lutPath: nil)
+        var restored = Renderer.DisplayState()
+        session.apply(to: &restored)
+        check("an image's own edits come back whole",
+              restored.exposureEV == 1.5 && restored.saturation == 0.25
+                  && restored.cropEnabled && restored.crop.z == 0.5,
+              detail: String(format: "EV %.2f, sat %.2f, crop %@",
+                             restored.exposureEV, restored.saturation,
+                             restored.cropEnabled ? "on" : "off"))
+
+        // A file's view transform is chosen from what kind of file it is, so an
+        // EXR opening as AgX has not been edited by anyone.
+        var untouchedEXR = Renderer.DisplayState()
+        untouchedEXR.viewTransform = .agx
+        var neutral = Renderer.DisplayState()
+        neutral.viewTransform = untouchedEXR.viewTransform
+        var a = Preset.from(untouchedEXR, lutPath: nil); a.name = ""
+        var b = Preset.from(neutral, lutPath: nil); b.name = ""
+        check("an untouched scene-linear file does not count as edited", a == b,
+              detail: "its detected view transform was mistaken for an edit")
+
+        // And something actually done to it does count.
+        var touched = untouchedEXR
+        touched.exposureEV = 0.5
+        var c = Preset.from(touched, lutPath: nil); c.name = ""
+        check("an exposure change does count as an edit", c != b,
+              detail: "a real edit was not noticed")
+    }
+
+    /// A grade written out as a cube has to be the same grade.
+    ///
+    /// The whole value of baking through the real shader is that the file cannot
+    /// be a second opinion about your look — so the things to prove are that
+    /// doing nothing produces a cube that does nothing, and that a grade with an
+    /// unmistakable signature comes back out with that signature intact.
+    private static func gradeBakesToACube() {
+        guard let renderer = Renderer(pixelFormat: .rgba16Float) else {
+            return fail("LUT bake", "no Metal device")
+        }
+        let n = 17
+        func entry(_ cube: [SIMD3<Float>], r: Int, g: Int, b: Int) -> SIMD3<Float> {
+            cube[(b * n + g) * n + r]
+        }
+
+        var neutral = Renderer.DisplayState()
+        neutral.viewTransform = .standard
+        guard let identity = renderer.bakeLUT(size: n, display: neutral) else {
+            return fail("LUT bake", "baking a neutral grade failed")
+        }
+        check("a baked cube has the right number of entries", identity.count == n * n * n,
+              detail: "got \(identity.count), want \(n * n * n)")
+
+        // Every entry should be its own coordinate: in equals out.
+        var worst: Float = 0
+        for b in 0..<n {
+            for g in 0..<n {
+                for r in 0..<n {
+                    let want = SIMD3(Float(r), Float(g), Float(b)) / Float(n - 1)
+                    let got = entry(identity, r: r, g: g, b: b)
+                    worst = max(worst, simd_reduce_max(abs(got - want)))
+                }
+            }
+        }
+        check("a neutral grade bakes to an identity cube", worst < 0.01,
+              detail: String(format: "worst entry was off by %.4f", worst))
+
+        // Saturation to zero: every entry must land on the grey axis, which no
+        // accidental identity or transposition could satisfy.
+        var mono = neutral
+        mono.saturation = 0
+        guard let grey = renderer.bakeLUT(size: n, display: mono) else {
+            return fail("LUT bake", "baking a desaturated grade failed")
+        }
+        let allGrey = grey.allSatisfy {
+            abs($0.x - $0.y) < 0.01 && abs($0.y - $0.z) < 0.01
+        }
+        check("a grade bakes in — saturation 0 gives a cube of greys", allGrey,
+              detail: "an entry came back coloured")
+        // A pure exposure change must keep neutrals neutral. Brightness is the
+        // most likely thing anyone bakes, and a channel-ordering slip in the
+        // lattice would show up here as a colour cast on the grey axis and
+        // nowhere else — an identity cube would still look perfect.
+        var brighter = neutral
+        brighter.exposureEV = 2
+        if let lifted = renderer.bakeLUT(size: n, display: brighter) {
+            let neutralsStayNeutral = (0..<n).allSatisfy { i in
+                let e = entry(lifted, r: i, g: i, b: i)
+                return abs(e.x - e.y) < 0.01 && abs(e.y - e.z) < 0.01
+            }
+            check("an exposure change bakes without tinting the grey axis",
+                  neutralsStayNeutral,
+                  detail: "a grey input came back coloured")
+            // +2 EV is four times the light: sRGB 0.5 is linear 0.214, which
+            // lands at 0.858 linear and encodes to about 0.936.
+            let mid = entry(lifted, r: (n - 1) / 2, g: (n - 1) / 2, b: (n - 1) / 2)
+            check("and by the right amount", abs(mid.x - 0.936) < 0.02,
+                  detail: String(format: "mid grey baked to %.3f, want 0.936", mid.x))
+        }
+
+        // And it is not simply a black cube.
+        let bright = entry(grey, r: n - 1, g: n - 1, b: n - 1)
+        check("and the baked cube still spans black to white",
+              bright.x > 0.9 && entry(grey, r: 0, g: 0, b: 0).x < 0.1,
+              detail: String(format: "white corner %.3f", bright.x))
+    }
+
+    /// "Unsaved" has to mean *changed since it was last written*, not merely
+    /// edited.
+    ///
+    /// Lupp writes nothing unless asked, so almost every open window has edits
+    /// in it. A warning that fired on all of them would be a dialog you learn to
+    /// dismiss without reading, which is worse than none — so the comparison is
+    /// against what actually reached disk, and it has to notice both that an
+    /// unchanged export is safe and that a later tweak is not.
+    private static func unsavedMeansUnwritten(in dir: URL) {
+        let image = dir.appendingPathComponent("frame.png")
+        var d = Renderer.DisplayState()
+        d.exposureEV = 0.75
+        let edited = Session.from(d, image: image, lutPath: nil, bookmark: false)
+
+        // Nothing written yet.
+        check("an edit with nothing written counts as unsaved",
+              Session?.none != edited, detail: "an unwritten edit looked saved")
+
+        // Exported, unchanged since: nothing to warn about.
+        let committed = Session.from(d, image: image, lutPath: nil, bookmark: false)
+        check("the same state written out stops counting", committed == edited,
+              detail: "an unchanged export still looked unsaved")
+
+        // Touched again afterwards: it counts once more.
+        var after = d
+        after.exposureEV = 0.9
+        let changed = Session.from(after, image: image, lutPath: nil, bookmark: false)
+        check("a change made after writing counts again", changed != committed,
+              detail: "an edit after export was not noticed")
+
+        // How you are looking at an image is not work done to it. Session
+        // records the channel and the overlays so a saved .lupp reopens the way
+        // you left it, and comparing those made an exported image count as
+        // unsaved the moment you pressed C.
+        var looking = d
+        looking.channel = .blue
+        looking.showClipping = true
+        let inspected = Session.from(looking, image: image, lutPath: nil, bookmark: false)
+        check("inspecting an image is not editing it",
+              ViewerWindowController.editContent(inspected)
+                  == ViewerWindowController.editContent(committed),
+              detail: "changing channel or overlay made an exported image look unsaved")
+        // But a real change still registers through the same comparison.
+        check("and a real change still registers past that",
+              ViewerWindowController.editContent(changed)
+                  != ViewerWindowController.editContent(committed),
+              detail: "normalising hid an actual edit")
+
+        // The crop is part of it — undo excludes it, this must not.
+        var cropped = d
+        cropped.cropEnabled = true
+        cropped.crop = SIMD4<Float>(0.1, 0.1, 0.8, 0.8)
+        check("a crop counts as unsaved work too",
+              Session.from(cropped, image: image, lutPath: nil, bookmark: false) != committed,
+              detail: "a crop made after export was not noticed")
     }
 
     private static func firstStack(in view: NSView) -> NSStackView? {
