@@ -657,16 +657,27 @@ final class ViewerWindowController: NSWindowController, ImageCanvasDelegate, NSW
     /// Kept even for an image whose edits were undone back to neutral, so the
     /// reset that got you there is itself undoable.
     private var undoStacks: [URL: UndoManager] = [:]
+
+    /// Far more steps than a sitting on one image plausibly takes, and still a
+    /// bound. A grade snapshot is a few hundred bytes, so this is about nothing
+    /// growing without limit rather than about size.
+    private static let undoDepth = 200
+
     /// Used only while no image is open, so the Edit menu has something to ask.
-    private let noImageUndo = UndoManager()
+    /// Capped like the rest: an unbounded manager nothing much writes to is
+    /// still an unbounded manager, and it does accept edits — the colour panel
+    /// exists whether or not a picture does.
+    private lazy var noImageUndo: UndoManager = {
+        let m = UndoManager()
+        m.levelsOfUndo = ViewerWindowController.undoDepth
+        return m
+    }()
 
     private var undo: UndoManager {
         guard let url = canvas.image?.url else { return noImageUndo }
         if let existing = undoStacks[url] { return existing }
         let made = UndoManager()
-        // A grade snapshot is a few hundred bytes, so this bound is about not
-        // growing without limit during a long session rather than about size.
-        made.levelsOfUndo = 200
+        made.levelsOfUndo = ViewerWindowController.undoDepth
         undoStacks[url] = made
         return made
     }
